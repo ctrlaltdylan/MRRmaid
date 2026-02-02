@@ -698,6 +698,146 @@ def cohort(
             console.print(f"[dim]Average M6 Retention: {avg_retention['M6']:.1f}%[/dim]")
 
 
+@app.command()
+def customers(
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Filter by source: 'shopify' or 'stripe'",
+    ),
+    period: str = typer.Option(
+        "month",
+        "--period",
+        "-p",
+        help="Analysis period: 'month', 'quarter', 'year', 'all'",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-n",
+        help="Number of customers to show",
+    ),
+    sort: str = typer.Option(
+        "revenue",
+        "--sort",
+        help="Sort by: 'revenue', 'transactions', 'name'",
+    ),
+    export: Optional[str] = typer.Option(
+        None,
+        "--export",
+        "-e",
+        help="Export to CSV file",
+    ),
+) -> None:
+    """Analyze customers by revenue concentration."""
+    settings = get_settings()
+    init_db(settings.database_url)
+
+    source_filter = None
+    if source == "shopify":
+        source_filter = TransactionSource.SHOPIFY
+    elif source == "stripe":
+        source_filter = TransactionSource.STRIPE
+
+    # Determine date range
+    now = datetime.utcnow()
+    if period == "month":
+        start_date = now - timedelta(days=30)
+    elif period == "quarter":
+        start_date = now - timedelta(days=90)
+    elif period == "year":
+        start_date = now - timedelta(days=365)
+    else:  # all
+        start_date = None
+
+    calculator = MetricsCalculator()
+    df = calculator.get_customer_analysis(
+        source=source_filter,
+        start_date=start_date,
+        end_date=now,
+    )
+
+    if df.empty:
+        rprint("[yellow]No customer data available. Run 'mrrmaid sync' first.[/yellow]")
+        raise typer.Exit(1)
+
+    # Sort
+    if sort == "revenue":
+        df = df.sort_values("revenue", ascending=False)
+    elif sort == "transactions":
+        df = df.sort_values("transaction_count", ascending=False)
+    elif sort == "name":
+        df = df.sort_values("customer_id")
+
+    # Export if requested
+    if export:
+        df.to_csv(export, index=False)
+        rprint(f"[green]Exported customer analysis to {export}[/green]")
+        return
+
+    # Calculate concentration metrics
+    total_revenue = df["revenue"].sum()
+    df["pct_of_total"] = (df["revenue"] / total_revenue * 100).round(1)
+    df["cumulative_pct"] = df["pct_of_total"].cumsum().round(1)
+
+    # Find concentration thresholds
+    top_10_pct = df.head(max(1, len(df) // 10))["revenue"].sum() / total_revenue * 100
+    top_20_pct = df.head(max(1, len(df) // 5))["revenue"].sum() / total_revenue * 100
+
+    # Header
+    period_label = period.title() if period != "all" else "All Time"
+    source_label = f" ({source.title()})" if source else ""
+    console.print(Panel(
+        f"[bold]Customer Revenue Analysis - {period_label}{source_label}[/bold]\n"
+        f"[dim]Total Revenue: ${total_revenue:,.2f} from {len(df)} customers[/dim]",
+        border_style="blue",
+    ))
+
+    # Concentration warning
+    if top_10_pct > 50:
+        console.print(f"[red]⚠ High concentration risk: Top 10% of customers = {top_10_pct:.1f}% of revenue[/red]")
+    elif top_10_pct > 30:
+        console.print(f"[yellow]⚠ Moderate concentration: Top 10% of customers = {top_10_pct:.1f}% of revenue[/yellow]")
+    else:
+        console.print(f"[green]✓ Healthy distribution: Top 10% of customers = {top_10_pct:.1f}% of revenue[/green]")
+
+    console.print(f"[dim]Top 20% = {top_20_pct:.1f}% of revenue[/dim]\n")
+
+    # Build table
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("#", justify="right", width=3)
+    table.add_column("Customer", style="white", no_wrap=True, overflow="ellipsis")
+    table.add_column("Revenue", justify="right")
+    table.add_column("% Rev", justify="right")
+    table.add_column("Cumul %", justify="right")
+    table.add_column("Txns", justify="right")
+
+    # Add rows
+    for i, (_, row) in enumerate(df.head(limit).iterrows(), 1):
+        # Color code by concentration
+        if row["cumulative_pct"] <= 50:
+            pct_style = "red"
+        elif row["cumulative_pct"] <= 80:
+            pct_style = "yellow"
+        else:
+            pct_style = "green"
+
+        table.add_row(
+            str(i),
+            str(row["customer_id"])[:35],
+            f"${row['revenue']:,.2f}",
+            f"{row['pct_of_total']:.1f}%",
+            f"[{pct_style}]{row['cumulative_pct']:.1f}%[/{pct_style}]",
+            str(int(row["transaction_count"])),
+        )
+
+    console.print(table)
+
+    if len(df) > limit:
+        console.print(f"\n[dim]Showing top {limit} of {len(df)} customers. Use --limit to see more.[/dim]")
+
+
 # ============================================================================
 # Data Commands
 # ============================================================================

@@ -817,3 +817,73 @@ class MetricsCalculator:
             "total_customers": int(retention_df["Customers"].sum()),
             "total_revenue": float(retention_df["Revenue"].sum()),
         }
+
+    def get_customer_analysis(
+        self,
+        source: Optional[TransactionSource] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        """
+        Get customer-level revenue analysis for concentration risk assessment.
+
+        Args:
+            source: Optional filter by source
+            start_date: Start of analysis period
+            end_date: End of analysis period
+
+        Returns:
+            DataFrame with customer revenue data sorted by revenue descending
+        """
+        with get_session() as session:
+            # Build query for customer aggregates
+            query = session.query(
+                Transaction.customer_id,
+                Transaction.shop_domain,
+                func.sum(Transaction.net_amount).label("revenue"),
+                func.count(Transaction.id).label("transaction_count"),
+                func.min(Transaction.created_at).label("first_seen"),
+                func.max(Transaction.created_at).label("last_seen"),
+            ).filter(
+                Transaction.customer_id.isnot(None),
+                Transaction.net_amount > 0,
+            )
+
+            if source:
+                query = query.filter(Transaction.source == source)
+
+            if start_date:
+                query = query.filter(Transaction.created_at >= start_date)
+
+            if end_date:
+                query = query.filter(Transaction.created_at <= end_date)
+
+            query = query.group_by(
+                Transaction.customer_id,
+                Transaction.shop_domain,
+            )
+
+            results = query.all()
+
+            if not results:
+                return pd.DataFrame()
+
+            # Convert to DataFrame
+            data = []
+            for row in results:
+                # Use shop_domain as display name if available, otherwise customer_id
+                display_name = row.shop_domain or row.customer_id
+                data.append({
+                    "customer_id": display_name,
+                    "revenue": float(row.revenue or 0),
+                    "transaction_count": row.transaction_count,
+                    "first_seen": row.first_seen,
+                    "last_seen": row.last_seen,
+                })
+
+            df = pd.DataFrame(data)
+
+            # Sort by revenue descending
+            df = df.sort_values("revenue", ascending=False).reset_index(drop=True)
+
+            return df
