@@ -74,9 +74,11 @@ class StripeClient:
         stripe.api_key = api_key
 
     def test_connection(self) -> bool:
-        """Test the API connection."""
+        """Test the API connection by listing subscriptions (works with restricted keys)."""
         try:
-            stripe.Account.retrieve()
+            # Use subscription list instead of Account.retrieve() since restricted keys
+            # may not have account read permission but will have subscription read
+            stripe.Subscription.list(limit=1)
             return True
         except Exception:
             return False
@@ -170,11 +172,15 @@ class StripeClient:
 
         for item in sub.get("items", {}).get("data", []):
             price = item.get("price", {})
-            quantity = item.get("quantity", 1)
+            quantity = item.get("quantity", 1) or 1
 
-            unit_amount = price.get("unit_amount", 0) / 100  # Convert from cents
-            interval = price.get("recurring", {}).get("interval", "month")
-            interval_count = price.get("recurring", {}).get("interval_count", 1)
+            # Handle tiered/metered pricing where unit_amount may be None
+            raw_unit_amount = price.get("unit_amount")
+            unit_amount = (raw_unit_amount / 100) if raw_unit_amount is not None else 0.0
+
+            recurring = price.get("recurring") or {}
+            interval = recurring.get("interval", "month")
+            interval_count = recurring.get("interval_count", 1) or 1
 
             # Normalize to monthly
             monthly_amount = self._normalize_to_monthly(
@@ -191,6 +197,7 @@ class StripeClient:
                     "unit_amount": unit_amount,
                     "interval": interval,
                     "interval_count": interval_count,
+                    "billing_scheme": price.get("billing_scheme"),
                 }
             )
 
@@ -201,18 +208,35 @@ class StripeClient:
             primary_interval = items[0].get("interval", "month")
             primary_interval_count = items[0].get("interval_count", 1)
 
+        # Get current period from subscription or first item (varies by subscription type)
+        current_period_start = getattr(sub, 'current_period_start', None)
+        current_period_end = getattr(sub, 'current_period_end', None)
+
+        # Fallback to item-level period if subscription-level not available
+        if current_period_start is None and items:
+            first_item = sub.get("items", {}).get("data", [{}])[0]
+            current_period_start = first_item.get("current_period_start")
+            current_period_end = first_item.get("current_period_end")
+
+        # Use created timestamp as fallback
+        created_ts = sub.created
+        if current_period_start is None:
+            current_period_start = created_ts
+        if current_period_end is None:
+            current_period_end = created_ts
+
         return StripeSubscription(
             id=sub.id,
             customer_id=sub.customer if isinstance(sub.customer, str) else sub.customer.id,
             status=sub.status,
-            currency=sub.currency.upper(),
-            current_period_start=datetime.fromtimestamp(sub.current_period_start),
-            current_period_end=datetime.fromtimestamp(sub.current_period_end),
-            created_at=datetime.fromtimestamp(sub.created),
+            currency=sub.currency.upper() if sub.currency else "USD",
+            current_period_start=datetime.fromtimestamp(current_period_start),
+            current_period_end=datetime.fromtimestamp(current_period_end),
+            created_at=datetime.fromtimestamp(created_ts),
             canceled_at=(
                 datetime.fromtimestamp(sub.canceled_at) if sub.canceled_at else None
             ),
-            cancel_at_period_end=sub.cancel_at_period_end,
+            cancel_at_period_end=sub.cancel_at_period_end or False,
             trial_start=(
                 datetime.fromtimestamp(sub.trial_start) if sub.trial_start else None
             ),
@@ -351,12 +375,21 @@ class StripeClient:
                 }
             )
 
+        # Get subscription_id - may be at top level or nested in parent.subscription_details
+        subscription_id = None
+        if hasattr(inv, 'subscription') and inv.subscription:
+            subscription_id = inv.subscription if isinstance(inv.subscription, str) else inv.subscription.id
+        elif inv.get("parent") and inv["parent"].get("subscription_details"):
+            subscription_id = inv["parent"]["subscription_details"].get("subscription")
+
+        # Get customer_id
+        customer = inv.customer
+        customer_id = customer if isinstance(customer, str) else (customer.id if customer else None)
+
         return StripeInvoice(
             id=inv.id,
-            customer_id=inv.customer if isinstance(inv.customer, str) else inv.customer.id,
-            subscription_id=inv.subscription if isinstance(inv.subscription, str) else (
-                inv.subscription.id if inv.subscription else None
-            ),
+            customer_id=customer_id or "unknown",
+            subscription_id=subscription_id,
             status=inv.status or "unknown",
             currency=inv.currency.upper() if inv.currency else "USD",
             amount_due=inv.amount_due / 100 if inv.amount_due else 0,

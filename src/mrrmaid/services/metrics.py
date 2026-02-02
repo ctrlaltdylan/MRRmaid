@@ -110,7 +110,10 @@ class MetricsCalculator:
         source: Optional[TransactionSource] = None,
     ) -> MetricsSummary:
         """
-        Calculate current MRR from active subscriptions.
+        Calculate current MRR from subscriptions and recent transactions.
+
+        For fixed-price subscriptions, uses the subscription amount.
+        For usage-based/metered billing, calculates from last month's revenue.
 
         Args:
             source: Optional filter by source (shopify/stripe)
@@ -119,7 +122,56 @@ class MetricsCalculator:
             MetricsSummary with current MRR
         """
         with get_session() as session:
-            return self._calculate_mrr_from_subscriptions(session, source)
+            summary = self._calculate_mrr_from_subscriptions(session, source)
+
+            # Also calculate MRR from recent transactions (last 30 days)
+            # This captures usage-based revenue and Shopify app revenue
+            last_month = datetime.utcnow() - timedelta(days=30)
+
+            self._add_transaction_based_mrr(session, summary, last_month, source)
+
+            return summary
+
+    def _add_transaction_based_mrr(
+        self,
+        session: Session,
+        summary: MetricsSummary,
+        since: datetime,
+        source: Optional[TransactionSource] = None,
+    ) -> None:
+        """Add MRR calculated from recent transactions (for usage-based billing)."""
+        # Query for recurring transactions in the period
+        query = session.query(
+            Transaction.source,
+            func.sum(Transaction.net_amount).label("total"),
+        ).filter(
+            Transaction.created_at >= since,
+            Transaction.transaction_type.in_([
+                TransactionType.APP_SUBSCRIPTION,
+                TransactionType.APP_USAGE,
+                TransactionType.SUBSCRIPTION_RENEWAL,
+            ]),
+        )
+
+        if source:
+            query = query.filter(Transaction.source == source)
+
+        results = query.group_by(Transaction.source).all()
+
+        for row in results:
+            txn_source = row[0]
+            total = row[1] or 0
+
+            if txn_source == TransactionSource.SHOPIFY:
+                # Only add if not already counted from subscriptions
+                if summary.shopify_mrr == 0:
+                    summary.shopify_mrr = total
+                    summary.total_mrr += total
+            elif txn_source == TransactionSource.STRIPE:
+                # For metered subscriptions, use transaction data if subscription MRR is 0
+                if summary.stripe_mrr == 0:
+                    summary.stripe_mrr = total
+                    summary.total_mrr += total
 
     def _calculate_mrr_from_subscriptions(
         self,

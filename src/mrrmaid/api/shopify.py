@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Generator, Optional
 
 import requests
+from requests.exceptions import HTTPError
 from pydantic import BaseModel
 
 
@@ -57,22 +58,23 @@ class ShopifyPartnerClient:
             time.sleep(self.RATE_LIMIT_DELAY - elapsed)
         self._last_request_time = time.time()
 
-    def _execute_query(self, query: str, variables: Optional[dict] = None) -> dict[str, Any]:
+    def _execute_query(
+        self, query: str, variables: Optional[dict] = None, max_retries: int = 3
+    ) -> dict[str, Any]:
         """
-        Execute a GraphQL query against the Partner API.
+        Execute a GraphQL query against the Partner API with retry logic.
 
         Args:
             query: GraphQL query string
             variables: Optional query variables
+            max_retries: Maximum number of retries for transient errors
 
         Returns:
             Query response data
 
         Raises:
-            requests.HTTPError: If the request fails
+            requests.HTTPError: If the request fails after all retries
         """
-        self._rate_limit()
-
         headers = {
             "Content-Type": "application/json",
             "X-Shopify-Access-Token": self.access_token,
@@ -82,21 +84,37 @@ class ShopifyPartnerClient:
         if variables:
             payload["variables"] = variables
 
-        response = requests.post(
-            self.endpoint,
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
-        response.raise_for_status()
+        last_error = None
+        for attempt in range(max_retries):
+            self._rate_limit()
 
-        result = response.json()
+            try:
+                response = requests.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+                response.raise_for_status()
 
-        if "errors" in result:
-            error_messages = [e.get("message", str(e)) for e in result["errors"]]
-            raise ValueError(f"GraphQL errors: {'; '.join(error_messages)}")
+                result = response.json()
 
-        return result.get("data", {})
+                if "errors" in result:
+                    error_messages = [e.get("message", str(e)) for e in result["errors"]]
+                    raise ValueError(f"GraphQL errors: {'; '.join(error_messages)}")
+
+                return result.get("data", {})
+
+            except HTTPError as e:
+                last_error = e
+                # Retry on 5xx server errors
+                if response.status_code >= 500 and attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2, 4, 6 seconds
+                    time.sleep(wait_time)
+                    continue
+                raise
+
+        raise last_error
 
     def get_transactions(
         self,
@@ -233,17 +251,13 @@ class ShopifyPartnerClient:
                             }}
                         }}
                         ... on ReferralTransaction {{
-                            netAmount {{
-                                amount
-                                currencyCode
-                            }}
-                            grossAmount {{
-                                amount
-                                currencyCode
-                            }}
                             shop {{
                                 id
                                 myshopifyDomain
+                            }}
+                            amount {{
+                                amount
+                                currencyCode
                             }}
                         }}
                     }}
@@ -311,13 +325,22 @@ class ShopifyPartnerClient:
         transaction_id = node.get("id", "")
         created_at = node.get("createdAt", "")
 
-        # Extract amounts
+        # Extract amounts (ReferralTransaction uses 'amount' instead of 'netAmount'/'grossAmount')
         net_amount_data = node.get("netAmount", {})
         gross_amount_data = node.get("grossAmount", {})
+        amount_data = node.get("amount", {})  # For ReferralTransaction
 
-        net_amount = float(net_amount_data.get("amount", 0)) if net_amount_data else 0.0
-        gross_amount = float(gross_amount_data.get("amount", 0)) if gross_amount_data else 0.0
-        currency = net_amount_data.get("currencyCode", "USD") if net_amount_data else "USD"
+        if net_amount_data:
+            net_amount = float(net_amount_data.get("amount", 0))
+            currency = net_amount_data.get("currencyCode", "USD")
+        elif amount_data:
+            net_amount = float(amount_data.get("amount", 0))
+            currency = amount_data.get("currencyCode", "USD")
+        else:
+            net_amount = 0.0
+            currency = "USD"
+
+        gross_amount = float(gross_amount_data.get("amount", 0)) if gross_amount_data else net_amount
 
         # Extract app info
         app_data = node.get("app", {})
