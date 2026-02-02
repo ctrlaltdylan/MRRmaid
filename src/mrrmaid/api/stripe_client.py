@@ -126,6 +126,8 @@ class StripeClient:
         status: Optional[str] = None,
         created_gte: Optional[datetime] = None,
         created_lte: Optional[datetime] = None,
+        start_after: Optional[str] = None,
+        on_page_complete: Optional[callable] = None,
     ) -> Generator[StripeSubscription, None, None]:
         """
         Iterate through all subscriptions with automatic pagination.
@@ -134,12 +136,15 @@ class StripeClient:
             status: Filter by subscription status
             created_gte: Filter subscriptions created after this date
             created_lte: Filter subscriptions created before this date
+            start_after: Resume pagination from this ID
+            on_page_complete: Callback called after each page with (last_id, count)
 
         Yields:
             StripeSubscription objects
         """
-        starting_after = None
+        starting_after = start_after
         has_more = True
+        count = 0
 
         while has_more:
             subscriptions = self.get_subscriptions(
@@ -158,6 +163,11 @@ class StripeClient:
                 if parsed:
                     yield parsed
                 starting_after = sub.id
+                count += 1
+
+            # Call page complete callback to save progress
+            if on_page_complete and starting_after:
+                on_page_complete(starting_after, count)
 
             has_more = len(subscriptions) == 100
 
@@ -324,15 +334,27 @@ class StripeClient:
         status: Optional[str] = None,
         created_gte: Optional[datetime] = None,
         created_lte: Optional[datetime] = None,
+        start_after: Optional[str] = None,
+        on_page_complete: Optional[callable] = None,
     ) -> Generator[StripeInvoice, None, None]:
         """
         Iterate through all invoices with automatic pagination.
 
+        Args:
+            subscription_id: Filter by subscription
+            customer_id: Filter by customer
+            status: Filter by invoice status
+            created_gte: Filter invoices created after this date
+            created_lte: Filter invoices created before this date
+            start_after: Resume pagination from this ID
+            on_page_complete: Callback called after each page with (last_id, count)
+
         Yields:
             StripeInvoice objects
         """
-        starting_after = None
+        starting_after = start_after
         has_more = True
+        count = 0
 
         while has_more:
             invoices = self.get_invoices(
@@ -353,6 +375,11 @@ class StripeClient:
                 if parsed:
                     yield parsed
                 starting_after = inv.id
+                count += 1
+
+            # Call page complete callback to save progress
+            if on_page_complete and starting_after:
+                on_page_complete(starting_after, count)
 
             has_more = len(invoices) == 100
 

@@ -277,6 +277,8 @@ class ShopifyPartnerClient:
         created_at_min: Optional[datetime] = None,
         created_at_max: Optional[datetime] = None,
         transaction_types: Optional[list[str]] = None,
+        start_cursor: Optional[str] = None,
+        on_page_complete: Optional[callable] = None,
     ) -> Generator[ShopifyTransaction, None, None]:
         """
         Iterate through all transactions with automatic pagination.
@@ -285,12 +287,15 @@ class ShopifyPartnerClient:
             created_at_min: Filter transactions created after this date
             created_at_max: Filter transactions created before this date
             transaction_types: Filter by transaction types
+            start_cursor: Resume from this cursor (for resumable syncing)
+            on_page_complete: Callback called after each page with (cursor, count)
 
         Yields:
             ShopifyTransaction objects
         """
-        cursor = None
+        cursor = start_cursor
         has_next = True
+        page_count = 0
 
         while has_next:
             data = self.get_transactions(
@@ -308,11 +313,16 @@ class ShopifyPartnerClient:
             for edge in edges:
                 node = edge.get("node", {})
                 cursor = edge.get("cursor")
+                page_count += 1
 
                 # Parse the transaction
                 transaction = self._parse_transaction(node)
                 if transaction:
                     yield transaction
+
+            # Call the page complete callback to save progress
+            if on_page_complete and cursor:
+                on_page_complete(cursor, page_count)
 
             has_next = page_info.get("hasNextPage", False)
 

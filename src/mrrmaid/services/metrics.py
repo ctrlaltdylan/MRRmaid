@@ -681,3 +681,139 @@ class MetricsCalculator:
                 })
 
             return pd.DataFrame(data)
+
+    def calculate_cohort_analysis(
+        self,
+        metric: str = "revenue",
+        source: Optional[TransactionSource] = None,
+        num_periods: int = 12,
+    ) -> pd.DataFrame:
+        """
+        Calculate cohort-based retention analysis.
+
+        Groups customers by their first transaction month and tracks
+        their revenue or count retention over subsequent months.
+
+        Args:
+            metric: "revenue" for revenue retention, "customers" for customer retention
+            source: Optional filter by source
+            num_periods: Number of periods to track (default 12 months)
+
+        Returns:
+            DataFrame with cohort retention data
+        """
+        with get_session() as session:
+            # Build base query for transactions
+            base_query = session.query(
+                Transaction.customer_id,
+                Transaction.created_at,
+                Transaction.net_amount,
+            ).filter(
+                Transaction.customer_id.isnot(None),
+                Transaction.net_amount > 0,
+            )
+
+            if source:
+                base_query = base_query.filter(Transaction.source == source)
+
+            transactions = base_query.all()
+
+            if not transactions:
+                return pd.DataFrame()
+
+            # Convert to DataFrame for easier manipulation
+            df = pd.DataFrame([
+                {
+                    "customer_id": t.customer_id,
+                    "created_at": t.created_at,
+                    "revenue": float(t.net_amount or 0),
+                }
+                for t in transactions
+            ])
+
+            # Add month column
+            df["month"] = pd.to_datetime(df["created_at"]).dt.to_period("M")
+
+            # Find each customer's cohort (first transaction month)
+            cohort_df = df.groupby("customer_id")["month"].min().reset_index()
+            cohort_df.columns = ["customer_id", "cohort"]
+
+            # Merge cohort back to transactions
+            df = df.merge(cohort_df, on="customer_id")
+
+            # Calculate period index (months since cohort)
+            df["period_index"] = (df["month"] - df["cohort"]).apply(lambda x: x.n if hasattr(x, 'n') else 0)
+
+            # Filter to requested number of periods
+            df = df[df["period_index"] < num_periods]
+
+            if metric == "revenue":
+                # Revenue retention: sum revenue by cohort and period
+                pivot = df.groupby(["cohort", "period_index"])["revenue"].sum().unstack(fill_value=0)
+
+                # Calculate retention as % of period 0
+                retention = pivot.div(pivot[0], axis=0) * 100
+
+            else:  # customers
+                # Customer retention: count unique customers by cohort and period
+                pivot = df.groupby(["cohort", "period_index"])["customer_id"].nunique().unstack(fill_value=0)
+
+                # Calculate retention as % of period 0
+                retention = pivot.div(pivot[0], axis=0) * 100
+
+            # Round to 1 decimal place
+            retention = retention.round(1)
+
+            # Convert period index to "M0", "M1", etc.
+            retention.columns = [f"M{i}" for i in retention.columns]
+
+            # Convert cohort period to string for display
+            retention.index = retention.index.astype(str)
+
+            # Add cohort size info
+            cohort_sizes = df.groupby("cohort").agg({
+                "customer_id": "nunique",
+                "revenue": "sum"
+            }).round(2)
+            cohort_sizes.index = cohort_sizes.index.astype(str)
+
+            retention["Customers"] = cohort_sizes["customer_id"]
+            retention["Revenue"] = cohort_sizes["revenue"]
+
+            # Reorder columns to put Customers and Revenue first
+            cols = ["Customers", "Revenue"] + [c for c in retention.columns if c not in ["Customers", "Revenue"]]
+            retention = retention[cols]
+
+            return retention
+
+    def get_cohort_summary(
+        self,
+        source: Optional[TransactionSource] = None,
+    ) -> dict:
+        """
+        Get summary statistics from cohort analysis.
+
+        Returns:
+            Dictionary with average retention rates by period
+        """
+        retention_df = self.calculate_cohort_analysis(metric="revenue", source=source)
+
+        if retention_df.empty:
+            return {}
+
+        # Calculate average retention for each period
+        period_cols = [c for c in retention_df.columns if c.startswith("M")]
+        avg_retention = {}
+
+        for col in period_cols:
+            # Exclude NaN values (cohorts that haven't reached this period yet)
+            values = retention_df[col].dropna()
+            if len(values) > 0:
+                avg_retention[col] = round(values.mean(), 1)
+
+        return {
+            "average_retention_by_period": avg_retention,
+            "total_cohorts": len(retention_df),
+            "total_customers": int(retention_df["Customers"].sum()),
+            "total_revenue": float(retention_df["Revenue"].sum()),
+        }

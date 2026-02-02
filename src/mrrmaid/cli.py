@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pandas as pd
 import typer
 from rich import print as rprint
 from rich.console import Console
@@ -180,8 +181,22 @@ def sync(
         "-d",
         help="Number of days of history to sync",
     ),
+    all_history: bool = typer.Option(
+        False,
+        "--all",
+        "-a",
+        help="Sync entire history (ignores --days)",
+    ),
+    fresh: bool = typer.Option(
+        False,
+        "--fresh",
+        "-f",
+        help="Start fresh (ignore saved progress)",
+    ),
 ) -> None:
     """Sync data from configured sources."""
+    from mrrmaid.services.sync import SyncState
+
     settings = get_settings()
     init_db(settings.database_url)
 
@@ -202,12 +217,39 @@ def sync(
         rprint("[red]No sources configured. Run 'mrrmaid configure' first.[/red]")
         raise typer.Exit(1)
 
+    # Initialize sync state for resumable syncing
+    sync_state = SyncState()
+
+    # Clear state if fresh flag is set
+    if fresh:
+        sync_state.clear_all()
+        rprint("[yellow]Starting fresh sync (cleared saved progress).[/yellow]")
+
     sync_service = DataSyncService(
         shopify_client=shopify_client,
         stripe_client=stripe_client,
+        sync_state=sync_state,
     )
 
-    start_date = datetime.utcnow() - timedelta(days=days)
+    # Check for resumable state
+    resume_info = []
+    if not fresh:
+        for key in ["shopify_transactions", "stripe_subscriptions", "stripe_invoices"]:
+            saved_count = sync_state.get_count(key)
+            if saved_count > 0:
+                resume_info.append(f"{key.replace('_', ' ')}: {saved_count} records")
+
+    if resume_info:
+        rprint("[cyan]Resuming sync from saved progress:[/cyan]")
+        for info in resume_info:
+            rprint(f"  [cyan]• {info}[/cyan]")
+
+    # Determine start date
+    if all_history:
+        start_date = None
+        rprint("[yellow]Syncing entire history. This may take a while...[/yellow]")
+    else:
+        start_date = datetime.utcnow() - timedelta(days=days)
 
     with Progress(
         SpinnerColumn(),
@@ -543,6 +585,117 @@ def nrr(
         interpretation = "[red]High churn. Revenue from existing customers is declining.[/red]"
 
     console.print(f"\n{interpretation}")
+
+
+@app.command()
+def cohort(
+    metric: str = typer.Option(
+        "revenue",
+        "--metric",
+        "-m",
+        help="Metric type: 'revenue' or 'customers'",
+    ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Filter by source: 'shopify' or 'stripe'",
+    ),
+    periods: int = typer.Option(
+        12,
+        "--periods",
+        "-p",
+        help="Number of months to track",
+    ),
+    export: Optional[str] = typer.Option(
+        None,
+        "--export",
+        "-e",
+        help="Export to CSV file",
+    ),
+) -> None:
+    """View cohort-based retention analysis."""
+    settings = get_settings()
+    init_db(settings.database_url)
+
+    source_filter = None
+    if source == "shopify":
+        source_filter = TransactionSource.SHOPIFY
+    elif source == "stripe":
+        source_filter = TransactionSource.STRIPE
+
+    calculator = MetricsCalculator()
+    df = calculator.calculate_cohort_analysis(
+        metric=metric,
+        source=source_filter,
+        num_periods=periods,
+    )
+
+    if df.empty:
+        rprint("[yellow]No cohort data available. Run 'mrrmaid sync' first.[/yellow]")
+        raise typer.Exit(1)
+
+    # Export if requested
+    if export:
+        df.to_csv(export)
+        rprint(f"[green]Exported cohort analysis to {export}[/green]")
+        return
+
+    # Display cohort table
+    metric_label = "Revenue Retention" if metric == "revenue" else "Customer Retention"
+    source_label = f" ({source.title()})" if source else ""
+
+    console.print(Panel(
+        f"[bold]Cohort Analysis - {metric_label}{source_label}[/bold]\n"
+        f"[dim]Shows % retention relative to first month (M0 = 100%)[/dim]",
+        border_style="blue",
+    ))
+
+    # Build the table
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Cohort", style="white", width=10)
+    table.add_column("Cust", justify="right", width=6)
+    table.add_column("Revenue", justify="right", width=10)
+
+    # Add period columns
+    period_cols = [c for c in df.columns if c.startswith("M")]
+    for col in period_cols:
+        table.add_column(col, justify="right", width=7)
+
+    # Add rows (most recent cohorts first)
+    for cohort_name in reversed(df.index.tolist()):
+        row = df.loc[cohort_name]
+        values = [cohort_name]
+        values.append(f"[dim]{int(row['Customers'])}[/dim]")
+        values.append(f"[dim]${row['Revenue']:,.0f}[/dim]")
+
+        for col in period_cols:
+            val = row[col]
+            if pd.isna(val):
+                values.append("[dim]-[/dim]")
+            else:
+                # Color code retention percentages
+                if val >= 90:
+                    values.append(f"[green]{val:.0f}%[/green]")
+                elif val >= 70:
+                    values.append(f"[yellow]{val:.0f}%[/yellow]")
+                else:
+                    values.append(f"[red]{val:.0f}%[/red]")
+
+        table.add_row(*values)
+
+    console.print(table)
+
+    # Summary stats
+    summary = calculator.get_cohort_summary(source=source_filter)
+    if summary:
+        avg_retention = summary.get("average_retention_by_period", {})
+        if "M1" in avg_retention:
+            console.print(f"\n[dim]Average M1 Retention: {avg_retention['M1']:.1f}%[/dim]")
+        if "M3" in avg_retention:
+            console.print(f"[dim]Average M3 Retention: {avg_retention['M3']:.1f}%[/dim]")
+        if "M6" in avg_retention:
+            console.print(f"[dim]Average M6 Retention: {avg_retention['M6']:.1f}%[/dim]")
 
 
 # ============================================================================

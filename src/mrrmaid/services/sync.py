@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,69 @@ from mrrmaid.models.transaction import (
     TransactionSource,
     TransactionType,
 )
+
+
+class SyncState:
+    """Manages sync state for resumable syncing."""
+
+    def __init__(self, state_file: Optional[Path] = None):
+        self.state_file = state_file or Path(".mrrmaid_sync_state.json")
+        self._state: dict = {}
+        self._load()
+
+    def _load(self) -> None:
+        """Load state from file."""
+        if self.state_file.exists():
+            try:
+                self._state = json.loads(self.state_file.read_text())
+            except (json.JSONDecodeError, IOError):
+                self._state = {}
+
+    def _save(self) -> None:
+        """Save state to file."""
+        self.state_file.write_text(json.dumps(self._state, indent=2))
+
+    def get_cursor(self, source: str) -> Optional[str]:
+        """Get the saved cursor for a source."""
+        return self._state.get(source, {}).get("cursor")
+
+    def get_last_id(self, source: str) -> Optional[str]:
+        """Get the last processed ID for a source."""
+        return self._state.get(source, {}).get("last_id")
+
+    def get_count(self, source: str) -> int:
+        """Get the count of records synced so far."""
+        return self._state.get(source, {}).get("count", 0)
+
+    def save_progress(
+        self,
+        source: str,
+        cursor: Optional[str] = None,
+        last_id: Optional[str] = None,
+        count: int = 0,
+    ) -> None:
+        """Save sync progress for a source."""
+        if source not in self._state:
+            self._state[source] = {}
+        if cursor:
+            self._state[source]["cursor"] = cursor
+        if last_id:
+            self._state[source]["last_id"] = last_id
+        self._state[source]["count"] = count
+        self._state[source]["updated_at"] = datetime.utcnow().isoformat()
+        self._save()
+
+    def clear(self, source: str) -> None:
+        """Clear state for a source after successful sync."""
+        if source in self._state:
+            del self._state[source]
+            self._save()
+
+    def clear_all(self) -> None:
+        """Clear all sync state."""
+        self._state = {}
+        if self.state_file.exists():
+            self.state_file.unlink()
 
 
 class DataSyncService:
@@ -35,6 +99,7 @@ class DataSyncService:
         self,
         shopify_client: Optional[ShopifyPartnerClient] = None,
         stripe_client: Optional[StripeClient] = None,
+        sync_state: Optional[SyncState] = None,
     ):
         """
         Initialize the sync service.
@@ -42,15 +107,18 @@ class DataSyncService:
         Args:
             shopify_client: Optional Shopify Partner API client
             stripe_client: Optional Stripe API client
+            sync_state: Optional sync state manager for resumable syncing
         """
         self.shopify_client = shopify_client
         self.stripe_client = stripe_client
+        self.sync_state = sync_state or SyncState()
 
     def sync_shopify_transactions(
         self,
         created_at_min: Optional[datetime] = None,
         created_at_max: Optional[datetime] = None,
         progress_callback: Optional[callable] = None,
+        resume: bool = True,
     ) -> int:
         """
         Sync transactions from Shopify Partner API.
@@ -59,6 +127,7 @@ class DataSyncService:
             created_at_min: Only sync transactions after this date
             created_at_max: Only sync transactions before this date
             progress_callback: Optional callback for progress updates
+            resume: Whether to resume from last saved cursor
 
         Returns:
             Number of transactions synced
@@ -66,11 +135,33 @@ class DataSyncService:
         if not self.shopify_client:
             raise ValueError("Shopify client not configured")
 
+        source_key = "shopify_transactions"
+
+        # Check for saved progress
+        start_cursor = None
         count = 0
+        if resume:
+            start_cursor = self.sync_state.get_cursor(source_key)
+            count = self.sync_state.get_count(source_key)
+            if start_cursor:
+                # Progress will be reported to user via CLI
+
+                pass
+
+        def on_page_complete(cursor: str, page_count: int) -> None:
+            """Save progress after each page."""
+            self.sync_state.save_progress(
+                source_key,
+                cursor=cursor,
+                count=count + page_count,
+            )
+
         with get_session() as session:
             for txn in self.shopify_client.iter_all_transactions(
                 created_at_min=created_at_min,
                 created_at_max=created_at_max,
+                start_cursor=start_cursor,
+                on_page_complete=on_page_complete,
             ):
                 self._upsert_shopify_transaction(session, txn)
                 count += 1
@@ -79,6 +170,9 @@ class DataSyncService:
                     progress_callback(count)
 
             session.commit()
+
+        # Clear state on successful completion
+        self.sync_state.clear(source_key)
 
         return count
 
@@ -135,6 +229,7 @@ class DataSyncService:
         created_gte: Optional[datetime] = None,
         created_lte: Optional[datetime] = None,
         progress_callback: Optional[callable] = None,
+        resume: bool = True,
     ) -> int:
         """
         Sync subscriptions from Stripe.
@@ -143,6 +238,7 @@ class DataSyncService:
             created_gte: Only sync subscriptions created after this date
             created_lte: Only sync subscriptions created before this date
             progress_callback: Optional callback for progress updates
+            resume: Whether to resume from last saved position
 
         Returns:
             Number of subscriptions synced
@@ -150,11 +246,29 @@ class DataSyncService:
         if not self.stripe_client:
             raise ValueError("Stripe client not configured")
 
+        source_key = "stripe_subscriptions"
+
+        # Check for saved progress
+        start_after = None
         count = 0
+        if resume:
+            start_after = self.sync_state.get_last_id(source_key)
+            count = self.sync_state.get_count(source_key)
+
+        def on_page_complete(last_id: str, page_count: int) -> None:
+            """Save progress after each page."""
+            self.sync_state.save_progress(
+                source_key,
+                last_id=last_id,
+                count=count + page_count,
+            )
+
         with get_session() as session:
             for sub in self.stripe_client.iter_all_subscriptions(
                 created_gte=created_gte,
                 created_lte=created_lte,
+                start_after=start_after,
+                on_page_complete=on_page_complete,
             ):
                 self._upsert_stripe_subscription(session, sub)
                 count += 1
@@ -163,6 +277,9 @@ class DataSyncService:
                     progress_callback(count)
 
             session.commit()
+
+        # Clear state on successful completion
+        self.sync_state.clear(source_key)
 
         return count
 
@@ -221,6 +338,7 @@ class DataSyncService:
         created_gte: Optional[datetime] = None,
         created_lte: Optional[datetime] = None,
         progress_callback: Optional[callable] = None,
+        resume: bool = True,
     ) -> int:
         """
         Sync invoices from Stripe as transactions.
@@ -229,6 +347,7 @@ class DataSyncService:
             created_gte: Only sync invoices created after this date
             created_lte: Only sync invoices created before this date
             progress_callback: Optional callback for progress updates
+            resume: Whether to resume from last saved position
 
         Returns:
             Number of invoices synced
@@ -236,12 +355,30 @@ class DataSyncService:
         if not self.stripe_client:
             raise ValueError("Stripe client not configured")
 
+        source_key = "stripe_invoices"
+
+        # Check for saved progress
+        start_after = None
         count = 0
+        if resume:
+            start_after = self.sync_state.get_last_id(source_key)
+            count = self.sync_state.get_count(source_key)
+
+        def on_page_complete(last_id: str, page_count: int) -> None:
+            """Save progress after each page."""
+            self.sync_state.save_progress(
+                source_key,
+                last_id=last_id,
+                count=count + page_count,
+            )
+
         with get_session() as session:
             for inv in self.stripe_client.iter_all_invoices(
                 status="paid",
                 created_gte=created_gte,
                 created_lte=created_lte,
+                start_after=start_after,
+                on_page_complete=on_page_complete,
             ):
                 self._upsert_stripe_invoice(session, inv)
                 count += 1
@@ -250,6 +387,9 @@ class DataSyncService:
                     progress_callback(count)
 
             session.commit()
+
+        # Clear state on successful completion
+        self.sync_state.clear(source_key)
 
         return count
 
