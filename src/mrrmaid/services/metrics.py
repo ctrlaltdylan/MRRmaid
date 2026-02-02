@@ -144,6 +144,7 @@ class MetricsCalculator:
         query = session.query(
             Transaction.source,
             func.sum(Transaction.net_amount).label("total"),
+            func.count(func.distinct(Transaction.customer_id)).label("unique_customers"),
         ).filter(
             Transaction.created_at >= since,
             Transaction.transaction_type.in_([
@@ -161,12 +162,16 @@ class MetricsCalculator:
         for row in results:
             txn_source = row[0]
             total = row[1] or 0
+            unique_customers = row[2] or 0
 
             if txn_source == TransactionSource.SHOPIFY:
                 # Only add if not already counted from subscriptions
                 if summary.shopify_mrr == 0:
                     summary.shopify_mrr = total
                     summary.total_mrr += total
+                # Add Shopify active "subscriptions" (unique shops with recent activity)
+                summary.total_subscriptions += unique_customers
+                summary.active_subscriptions += unique_customers
             elif txn_source == TransactionSource.STRIPE:
                 # For metered subscriptions, use transaction data if subscription MRR is 0
                 if summary.stripe_mrr == 0:
