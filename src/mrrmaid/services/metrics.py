@@ -321,64 +321,99 @@ class MetricsCalculator:
         end_date: datetime,
         source: Optional[TransactionSource] = None,
     ) -> None:
-        """Calculate churn rate and retention metrics."""
-        # Get subscriptions that churned in the period
-        churn_query = session.query(Subscription).filter(
-            Subscription.canceled_at >= start_date,
-            Subscription.canceled_at <= end_date,
+        """Calculate churn rate and retention metrics using cohort analysis."""
+        # Calculate the previous period (same duration before start_date)
+        period_length = end_date - start_date
+        prev_start = start_date - period_length
+        prev_end = start_date
+
+        # Get revenue by customer for previous period (the "starting" cohort)
+        prev_query = session.query(
+            Transaction.customer_id,
+            func.sum(Transaction.net_amount).label("revenue"),
+        ).filter(
+            Transaction.created_at >= prev_start,
+            Transaction.created_at < prev_end,
+            Transaction.customer_id.isnot(None),
         )
 
         if source:
-            churn_query = churn_query.filter(Subscription.source == source)
+            prev_query = prev_query.filter(Transaction.source == source)
 
-        churned = churn_query.all()
-        churned_mrr = sum(sub.monthly_amount or 0 for sub in churned)
+        prev_results = prev_query.group_by(Transaction.customer_id).all()
+        prev_revenue_by_customer = {r[0]: r[1] or 0 for r in prev_results}
+        starting_mrr = sum(prev_revenue_by_customer.values())
+        starting_customers = set(prev_revenue_by_customer.keys())
+
+        # Get revenue by customer for current period
+        curr_query = session.query(
+            Transaction.customer_id,
+            func.sum(Transaction.net_amount).label("revenue"),
+        ).filter(
+            Transaction.created_at >= start_date,
+            Transaction.created_at <= end_date,
+            Transaction.customer_id.isnot(None),
+        )
+
+        if source:
+            curr_query = curr_query.filter(Transaction.source == source)
+
+        curr_results = curr_query.group_by(Transaction.customer_id).all()
+        curr_revenue_by_customer = {r[0]: r[1] or 0 for r in curr_results}
+        current_customers = set(curr_revenue_by_customer.keys())
+
+        # Calculate NRR components
+        # Churned: customers in previous period but not in current
+        churned_customers = starting_customers - current_customers
+        churned_mrr = sum(prev_revenue_by_customer.get(c, 0) for c in churned_customers)
+
+        # Retained customers: in both periods
+        retained_customers = starting_customers & current_customers
+
+        # Expansion: retained customers paying more
+        # Contraction: retained customers paying less
+        expansion_mrr = 0.0
+        contraction_mrr = 0.0
+        for customer in retained_customers:
+            prev_rev = prev_revenue_by_customer.get(customer, 0)
+            curr_rev = curr_revenue_by_customer.get(customer, 0)
+            diff = curr_rev - prev_rev
+            if diff > 0:
+                expansion_mrr += diff
+            elif diff < 0:
+                contraction_mrr += abs(diff)
+
+        # New customers: in current period but not in previous
+        new_customers = current_customers - starting_customers
+        new_mrr = sum(curr_revenue_by_customer.get(c, 0) for c in new_customers)
+
+        # Update summary
         summary.churned_mrr = churned_mrr
-        summary.churned_subscriptions = len(churned)
+        summary.churned_subscriptions = len(churned_customers)
+        summary.expansion_mrr = expansion_mrr
+        summary.contraction_mrr = contraction_mrr
+        summary.new_mrr = new_mrr
+        summary.new_subscriptions = len(new_customers)
 
-        # Get starting MRR (subscriptions active at start of period)
-        # This is an approximation based on current subscription data
-        start_query = session.query(Subscription).filter(
-            Subscription.created_at < start_date,
-            or_(
-                Subscription.canceled_at.is_(None),
-                Subscription.canceled_at >= start_date,
-            ),
-        )
-
-        if source:
-            start_query = start_query.filter(Subscription.source == source)
-
-        starting_subs = start_query.all()
-        starting_mrr = sum(sub.monthly_amount or 0 for sub in starting_subs)
-
-        # Calculate rates
+        # Calculate retention rates
         if starting_mrr > 0:
-            # Churn rate = Churned MRR / Starting MRR
+            # Gross Revenue Retention = (Starting - Churn - Contraction) / Starting
+            summary.gross_revenue_retention = (
+                (starting_mrr - churned_mrr - contraction_mrr) / starting_mrr
+            ) * 100
+
+            # Net Revenue Retention = (Starting + Expansion - Contraction - Churn) / Starting
+            summary.net_revenue_retention = (
+                (starting_mrr + expansion_mrr - contraction_mrr - churned_mrr) / starting_mrr
+            ) * 100
+
+            # Churn rate
             summary.churn_rate = (churned_mrr / starting_mrr) * 100
 
-            # Gross Revenue Retention = (Starting MRR - Churned MRR - Contraction) / Starting MRR
-            summary.gross_revenue_retention = (
-                (starting_mrr - churned_mrr - summary.contraction_mrr) / starting_mrr
-            ) * 100
-
-            # Net Revenue Retention = (Starting MRR + Expansion - Churned - Contraction) / Starting MRR
-            summary.net_revenue_retention = (
-                (
-                    starting_mrr
-                    + summary.expansion_mrr
-                    - churned_mrr
-                    - summary.contraction_mrr
-                )
-                / starting_mrr
-            ) * 100
-
-        if len(starting_subs) > 0:
-            # Customer churn rate
-            customer_churn = (summary.churned_subscriptions / len(starting_subs)) * 100
-            # Store this as churn_rate if we don't have revenue-based churn
-            if summary.churn_rate is None:
-                summary.churn_rate = customer_churn
+        # Store totals in summary
+        summary.total_mrr = sum(curr_revenue_by_customer.values())
+        summary.total_subscriptions = len(current_customers)
+        summary.active_subscriptions = len(retained_customers) + len(new_customers)
 
     def get_mrr_trend(
         self,
