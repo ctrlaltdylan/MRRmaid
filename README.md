@@ -1,251 +1,256 @@
-# MRRmaid
+# MRRmaid 🧜‍♀️
 
-RevOps dashboard for founders to track key subscription metrics from Shopify Partner and Stripe.
+A CLI dashboard for indie hackers and founders to track MRR, NRR, churn, and customer concentration from Shopify Partner and Stripe.
 
-## Features
+```
+╭────────────────────── Monthly Recurring Revenue (MRR) ───────────────────────╮
+│ $72,793.48                                                                   │
+│ (Shopify: $64,384.18 | Stripe: $8,409.30)                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
 
-- **MRR (Monthly Recurring Revenue)**: Track your recurring revenue from both Shopify apps and Stripe subscriptions
-- **NRR (Net Revenue Retention)**: Measure expansion and contraction in your customer base
-- **Churn**: Monitor customer and revenue churn rates
-- **Multi-source**: Combine data from Shopify Partner API and Stripe API
-- **Filtering**: Filter by date range, source, and more
-- **Export**: Export data to CSV for further analysis
+## Why MRRmaid?
+
+- **No SaaS fees** - Your data stays local in SQLite
+- **Multi-source** - Combines Shopify Partner + Stripe in one view
+- **Cohort analysis** - Track retention by customer vintage
+- **Concentration risk** - Identify over-reliance on top customers
+- **Resumable sync** - Full history backfills that survive interruptions
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/MRRmaid.git
+# With pip
+pip install mrrmaid
+
+# Or clone and install locally
+git clone https://github.com/ctrlaltdylan/MRRmaid.git
 cd MRRmaid
-
-# Install dependencies
 pip install -e .
+```
 
-# Or install from requirements
-pip install -r requirements.txt
+## Quick Start
+
+```bash
+# 1. Configure your API credentials
+mrrmaid configure
+
+# 2. Sync your data
+mrrmaid sync
+
+# 3. View your dashboard
+mrrmaid dashboard
 ```
 
 ## Configuration
 
-### Option 1: Interactive Configuration
+### Interactive Setup
 
 ```bash
 mrrmaid configure
 ```
 
-### Option 2: Environment Variables
+### Environment Variables
 
-Copy `.env.example` to `.env` and fill in your credentials:
+Create a `.env` file:
 
 ```bash
-cp .env.example .env
+# Shopify Partner API
+SHOPIFY_PARTNER_ACCESS_TOKEN=your_token_here
+SHOPIFY_ORGANIZATION_ID=your_org_id
+
+# Stripe API
+STRIPE_API_KEY=sk_live_xxx
 ```
 
-### Shopify Partner API
+### Getting API Credentials
 
-1. Go to [Shopify Partners Dashboard](https://partners.shopify.com)
-2. Navigate to **Settings** → **Partner API clients**
-3. Create a new API client with "View financials" permission
-4. Copy the access token and your organization ID (from the URL)
+**Shopify Partner API:**
+1. Go to [Shopify Partners](https://partners.shopify.com) → Settings → Partner API clients
+2. Create a client with "View financials" permission
+3. Copy the access token and organization ID (from URL: `partners.shopify.com/ORG_ID/...`)
 
-### Stripe API
-
+**Stripe API:**
 1. Go to [Stripe Dashboard](https://dashboard.stripe.com/apikeys)
-2. Copy your Secret Key (starts with `sk_live_` or `sk_test_`)
+2. Copy your Secret Key (`sk_live_...` or `sk_test_...`)
 
-## Usage
+## Commands
 
-### Check Configuration Status
+### Dashboard
 
 ```bash
-mrrmaid status
+mrrmaid dashboard                    # Full overview
+mrrmaid dashboard --source shopify   # Filter by source
+```
+
+### MRR Trends
+
+```bash
+mrrmaid mrr                          # Monthly MRR trend
+mrrmaid mrr --granularity week       # Weekly breakdown
+mrrmaid mrr --start 2025-01-01       # Custom date range
+```
+
+### Net Revenue Retention
+
+```bash
+mrrmaid nrr                          # Monthly NRR
+mrrmaid nrr --period quarter         # Quarterly comparison
+```
+
+Calculates NRR using cohort analysis:
+```
+NRR = (Starting MRR + Expansion - Contraction - Churn) / Starting MRR × 100
+```
+
+### Cohort Analysis
+
+Track retention by customer vintage:
+
+```bash
+mrrmaid cohort                       # Revenue retention by cohort
+mrrmaid cohort --metric customers    # Customer count retention
+mrrmaid cohort --periods 12          # Track 12 months
+mrrmaid cohort --export cohorts.csv  # Export for spreadsheets
+```
+
+Output:
+```
+┏━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━┓
+┃ Cohort   ┃ Cust ┃  Revenue ┃    M0 ┃    M1 ┃    M2 ┃     M3 ┃
+┡━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━┩
+│ 2025-11  │  263 │ $159,021 │  100% │  124% │  135% │     9% │
+│ 2025-10  │    3 │   $1,016 │  100% │  102% │  189% │     0% │
+│ 2025-09  │    2 │   $1,752 │  100% │   65% │   70% │    88% │
+```
+
+### Customer Concentration
+
+Identify revenue concentration risk:
+
+```bash
+mrrmaid customers                    # Top customers by revenue
+mrrmaid customers --period all       # All-time analysis
+mrrmaid customers --limit 50         # Show more customers
+mrrmaid customers --export cust.csv  # Export to CSV
+```
+
+Output:
+```
+⚠ High concentration risk: Top 10% of customers = 57.8% of revenue
+Top 20% = 70.5% of revenue
+
+┏━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━┓
+┃   # ┃ Customer                   ┃   Revenue ┃ % Rev ┃ Cumul % ┃
+┡━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━┩
+│   1 │ bigcustomer.myshopify.com  │ $12,912   │ 17.6% │   17.6% │
+│   2 │ another.myshopify.com      │  $2,858   │  3.9% │   21.5% │
+```
+
+### Churn
+
+```bash
+mrrmaid churn                        # Monthly churn rate
+mrrmaid churn --period quarter       # Quarterly churn
 ```
 
 ### Sync Data
 
 ```bash
-# Sync all sources (last 90 days by default)
-mrrmaid sync
-
-# Sync specific source
-mrrmaid sync --source shopify
-mrrmaid sync --source stripe
-
-# Sync more history
-mrrmaid sync --days 365
+mrrmaid sync                         # Last 90 days (default)
+mrrmaid sync --days 365              # Last year
+mrrmaid sync --all                   # Full history (resumable)
+mrrmaid sync --all --fresh           # Full history, start over
+mrrmaid sync --source shopify        # Single source only
 ```
 
-### View Dashboard
+Syncs are **resumable** - if interrupted, just run again to continue from where you left off.
+
+### Transactions & Subscriptions
 
 ```bash
-# Full dashboard
-mrrmaid dashboard
-
-# Filter by source
-mrrmaid dashboard --source stripe
-```
-
-### View MRR Trends
-
-```bash
-# Monthly MRR trend for the last year
-mrrmaid mrr
-
-# Custom date range and granularity
-mrrmaid mrr --start 2025-01-01 --end 2025-12-31 --granularity month
-
-# Weekly granularity
-mrrmaid mrr --granularity week
-```
-
-### View Churn Metrics
-
-```bash
-# Last month's churn
-mrrmaid churn
-
-# Quarterly churn
-mrrmaid churn --period quarter
-
-# Yearly churn
-mrrmaid churn --period year
-```
-
-### View NRR (Net Revenue Retention)
-
-```bash
-# Monthly NRR
-mrrmaid nrr
-
-# Quarterly NRR
-mrrmaid nrr --period quarter
-```
-
-### View Transactions
-
-```bash
-# Recent transactions
-mrrmaid transactions
-
-# Filter by source and date
-mrrmaid transactions --source stripe --start 2025-01-01
-
-# Export to CSV
-mrrmaid transactions --export transactions.csv
-```
-
-### View Subscriptions
-
-```bash
-# All subscriptions
-mrrmaid subscriptions
-
-# Filter by status
+mrrmaid transactions                 # Recent transactions
+mrrmaid transactions --export tx.csv # Export to CSV
+mrrmaid subscriptions                # View subscriptions
 mrrmaid subscriptions --status active
-
-# Export to CSV
-mrrmaid subscriptions --export subscriptions.csv
 ```
 
-### Save Snapshots
+### Snapshots
 
 ```bash
-# Save current metrics as a snapshot
-mrrmaid snapshot --save
-
-# View historical snapshots
-mrrmaid snapshot
+mrrmaid snapshot --save              # Save current metrics
+mrrmaid snapshot                     # View historical snapshots
 ```
 
 ## Metrics Explained
 
-### MRR (Monthly Recurring Revenue)
-
-The sum of all recurring revenue normalized to a monthly amount. Annual subscriptions are divided by 12, weekly subscriptions are multiplied by ~4.33.
-
-### NRR (Net Revenue Retention)
-
-```
-NRR = (Starting MRR + Expansion - Contraction - Churn) / Starting MRR × 100
-```
-
-- **> 100%**: Revenue from existing customers is growing (excellent)
-- **90-100%**: Slight revenue decline from existing customers
-- **< 90%**: Significant churn problem
-
-### GRR (Gross Revenue Retention)
-
-```
-GRR = (Starting MRR - Contraction - Churn) / Starting MRR × 100
-```
-
-Unlike NRR, GRR doesn't count expansion revenue. It measures how much revenue you retain without upsells.
-
-### Churn Rate
-
-```
-Churn Rate = Churned MRR / Starting MRR × 100
-```
-
-Healthy churn rates vary by industry, but generally:
-- **< 5%**: Good
-- **5-10%**: Moderate
-- **> 10%**: High, needs attention
+| Metric | Formula | Good | Warning |
+|--------|---------|------|---------|
+| **NRR** | (Start + Expansion - Contraction - Churn) / Start | >100% | <90% |
+| **GRR** | (Start - Contraction - Churn) / Start | >90% | <80% |
+| **Churn** | Churned MRR / Starting MRR | <5% | >10% |
+| **Concentration** | Top 10% customer revenue / Total | <30% | >50% |
 
 ## Data Sources
 
 ### Shopify Partner API
 
-Fetches:
-- App subscription sales
-- App usage sales
-- One-time app sales
-- Service sales
-- Referral transactions
-
-**Note**: Shopify Partner API transaction data is for analytics only and should not be used for financial reporting.
+- App subscription charges
+- App usage charges (metered billing)
+- One-time app charges
+- Service revenue
+- Referral commissions
 
 ### Stripe API
 
-Fetches:
-- Subscriptions (with full item details)
-- Invoices (for historical MRR calculation)
-- Customer information
+- Subscriptions (with line items)
+- Invoices (for historical MRR)
+- Metered billing usage
 
 ## Architecture
 
 ```
 src/mrrmaid/
 ├── api/
-│   ├── shopify.py      # Shopify Partner GraphQL client
-│   └── stripe_client.py # Stripe REST API client
+│   ├── shopify.py         # Shopify Partner GraphQL client
+│   └── stripe_client.py   # Stripe REST client
 ├── models/
-│   ├── database.py     # SQLAlchemy configuration
-│   └── transaction.py  # Data models
+│   ├── database.py        # SQLite via SQLAlchemy
+│   └── transaction.py     # Data models
 ├── services/
-│   ├── metrics.py      # MRR, NRR, Churn calculations
-│   └── sync.py         # Data synchronization
+│   ├── metrics.py         # MRR, NRR, Churn, Cohort calculations
+│   └── sync.py            # Resumable data sync
 ├── utils/
-│   └── config.py       # Configuration management
-└── cli.py              # Command-line interface
+│   └── config.py          # Configuration management
+└── cli.py                 # Typer CLI
 ```
+
+Data is stored locally in `mrrmaid.db` (SQLite).
 
 ## Development
 
 ```bash
-# Install dev dependencies
+# Install with dev dependencies
 pip install -e ".[dev]"
 
 # Run tests
 pytest
 
-# Format code
+# Format
 black src/
 
 # Lint
 ruff src/
 ```
 
+## Contributing
+
+Contributions welcome! Please open an issue first to discuss what you'd like to change.
+
 ## License
 
 MIT
+
+---
+
+Built for indie hackers who want to understand their revenue without paying for expensive analytics tools.

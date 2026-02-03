@@ -5,12 +5,37 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mrrmaid"
 version = "0.1.0"
-description = "RevOps dashboard for tracking MRR, NRR, and Churn from Shopify Partner and Stripe"
+description = "CLI dashboard for tracking MRR, NRR, churn, and customer concentration from Shopify Partner and Stripe"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "MRRmaid Team"}
+    {name = "Dylan Pierce", email = "dylanjpierce@gmail.com"}
+]
+keywords = [
+    "mrr",
+    "saas",
+    "metrics",
+    "revenue",
+    "churn",
+    "nrr",
+    "shopify",
+    "stripe",
+    "analytics",
+    "dashboard",
+    "cli",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
 ]
 dependencies = [
     "requests>=2.31.0",
@@ -31,6 +56,11 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ctrlaltdylan/MRRmaid"
+Repository = "https://github.com/ctrlaltdylan/MRRmaid"
+Issues = "https://github.com/ctrlaltdylan/MRRmaid/issues"
 
 [project.scripts]
 mrrmaid = "mrrmaid.cli:app"
