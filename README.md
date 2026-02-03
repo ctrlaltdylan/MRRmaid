@@ -84,7 +84,11 @@ STRIPE_API_KEY=sk_live_xxx
 
 **Stripe API:**
 1. Go to [Stripe Dashboard](https://dashboard.stripe.com/apikeys)
-2. Copy your Secret Key (`sk_live_...` or `sk_test_...`)
+2. Create a restricted key with these **read** permissions:
+   - Customers
+   - Subscriptions
+   - Invoices
+3. Copy the key (`rk_live_...` or use a secret key `sk_live_...`)
 
 ## Command Reference
 
