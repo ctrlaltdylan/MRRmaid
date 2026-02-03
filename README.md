@@ -1,21 +1,33 @@
 # MRRmaid 🧜‍♀️
 
-A CLI dashboard for indie hackers and founders to track MRR, NRR, churn, and customer concentration from Shopify Partner and Stripe.
+Track MRR, NRR, churn, and customer concentration from Shopify Partner and Stripe.
+
+## Why MRRmaid?
+
+**Local-first.** Your revenue data stays on your machine in SQLite. No third-party analytics service storing your financials.
+
+**CLI-driven.** No browser, no dashboards to click through. Just run `mrrmaid dashboard` and get your numbers.
+
+**Agent-friendly.** Built for automation and AI agents. Structured output, CSV exports, and scriptable commands.
+
+**Free.** No SaaS fees, no tiers, no "contact sales." MIT licensed, run it forever.
 
 ```
+$ mrrmaid dashboard
+
 ╭────────────────────── Monthly Recurring Revenue (MRR) ───────────────────────╮
 │ $72,793.48                                                                   │
 │ (Shopify: $64,384.18 | Stripe: $8,409.30)                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-## Why MRRmaid?
+## Features
 
-- **No SaaS fees** - Your data stays local in SQLite
 - **Multi-source** - Combines Shopify Partner + Stripe in one view
 - **Cohort analysis** - Track retention by customer vintage
 - **Concentration risk** - Identify over-reliance on top customers
 - **Resumable sync** - Full history backfills that survive interruptions
+- **Export everything** - CSV exports for all data
 
 ## Installation
 
