@@ -823,6 +823,7 @@ class MetricsCalculator:
         source: Optional[TransactionSource] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        cohort_month: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Get customer-level revenue analysis for concentration risk assessment.
@@ -831,11 +832,44 @@ class MetricsCalculator:
             source: Optional filter by source
             start_date: Start of analysis period
             end_date: End of analysis period
+            cohort_month: Filter by cohort (first transaction month), format: 'YYYY-MM'
 
         Returns:
             DataFrame with customer revenue data sorted by revenue descending
         """
         with get_session() as session:
+            # If filtering by cohort, first find customers in that cohort
+            cohort_customer_ids = None
+            if cohort_month:
+                # Parse cohort month
+                try:
+                    cohort_start = datetime.strptime(cohort_month, "%Y-%m")
+                    if cohort_start.month == 12:
+                        cohort_end = cohort_start.replace(year=cohort_start.year + 1, month=1)
+                    else:
+                        cohort_end = cohort_start.replace(month=cohort_start.month + 1)
+                except ValueError:
+                    raise ValueError(f"Invalid cohort format: {cohort_month}. Use YYYY-MM.")
+
+                # Find customers whose first transaction is in this cohort
+                first_txn_subquery = session.query(
+                    Transaction.customer_id,
+                    func.min(Transaction.created_at).label("first_txn"),
+                ).filter(
+                    Transaction.customer_id.isnot(None),
+                    Transaction.net_amount > 0,
+                ).group_by(Transaction.customer_id).subquery()
+
+                cohort_customers = session.query(first_txn_subquery.c.customer_id).filter(
+                    first_txn_subquery.c.first_txn >= cohort_start,
+                    first_txn_subquery.c.first_txn < cohort_end,
+                ).all()
+
+                cohort_customer_ids = {c[0] for c in cohort_customers}
+
+                if not cohort_customer_ids:
+                    return pd.DataFrame()
+
             # Build query for customer aggregates
             query = session.query(
                 Transaction.customer_id,
@@ -857,6 +891,9 @@ class MetricsCalculator:
 
             if end_date:
                 query = query.filter(Transaction.created_at <= end_date)
+
+            if cohort_customer_ids:
+                query = query.filter(Transaction.customer_id.in_(cohort_customer_ids))
 
             query = query.group_by(
                 Transaction.customer_id,

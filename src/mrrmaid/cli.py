@@ -712,6 +712,12 @@ def customers(
         "-p",
         help="Analysis period: 'month', 'quarter', 'year', 'all'",
     ),
+    cohort: Optional[str] = typer.Option(
+        None,
+        "--cohort",
+        "-c",
+        help="Filter by cohort month (YYYY-MM), e.g., '2025-11'",
+    ),
     limit: int = typer.Option(
         20,
         "--limit",
@@ -756,6 +762,7 @@ def customers(
         source=source_filter,
         start_date=start_date,
         end_date=now,
+        cohort_month=cohort,
     )
 
     if df.empty:
