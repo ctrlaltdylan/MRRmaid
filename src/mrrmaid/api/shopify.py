@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Generator, Optional
 
 import requests
-from requests.exceptions import HTTPError
+from requests.exceptions import HTTPError, Timeout, ConnectionError
 from pydantic import BaseModel
 
 
@@ -59,7 +59,7 @@ class ShopifyPartnerClient:
         self._last_request_time = time.time()
 
     def _execute_query(
-        self, query: str, variables: Optional[dict] = None, max_retries: int = 3
+        self, query: str, variables: Optional[dict] = None, max_retries: int = 5
     ) -> dict[str, Any]:
         """
         Execute a GraphQL query against the Partner API with retry logic.
@@ -93,7 +93,7 @@ class ShopifyPartnerClient:
                     self.endpoint,
                     headers=headers,
                     json=payload,
-                    timeout=30,
+                    timeout=60,  # Increased timeout
                 )
                 response.raise_for_status()
 
@@ -105,11 +105,21 @@ class ShopifyPartnerClient:
 
                 return result.get("data", {})
 
+            except (Timeout, ConnectionError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8, 16 seconds
+                    print(f"  Timeout/connection error, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                raise
+
             except HTTPError as e:
                 last_error = e
-                # Retry on 5xx server errors
-                if response.status_code >= 500 and attempt < max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2, 4, 6 seconds
+                # Retry on 5xx server errors or 429 rate limit
+                if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4, 8, 16 seconds
+                    print(f"  HTTP {response.status_code}, retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(wait_time)
                     continue
                 raise
