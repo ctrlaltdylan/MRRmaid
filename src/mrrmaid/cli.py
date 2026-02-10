@@ -175,17 +175,17 @@ def sync(
         "-s",
         help="Source to sync: 'shopify', 'stripe', or 'all'",
     ),
-    days: int = typer.Option(
-        90,
+    days: Optional[int] = typer.Option(
+        None,
         "--days",
         "-d",
-        help="Number of days of history to sync",
+        help="Sync specific number of days (overrides incremental)",
     ),
     all_history: bool = typer.Option(
         False,
         "--all",
         "-a",
-        help="Sync entire history (ignores --days)",
+        help="Sync entire history",
     ),
     fresh: bool = typer.Option(
         False,
@@ -196,6 +196,9 @@ def sync(
 ) -> None:
     """Sync data from configured sources."""
     from mrrmaid.services.sync import SyncState
+    from mrrmaid.models.transaction import Transaction
+    from mrrmaid.models.database import get_session
+    from sqlalchemy import func
 
     settings = get_settings()
     init_db(settings.database_url)
@@ -245,11 +248,24 @@ def sync(
             rprint(f"  [cyan]• {info}[/cyan]")
 
     # Determine start date
+    # Priority: --all > --days > incremental (default)
     if all_history:
         start_date = None
         rprint("[yellow]Syncing entire history. This may take a while...[/yellow]")
-    else:
+    elif days is not None:
         start_date = datetime.utcnow() - timedelta(days=days)
+        rprint(f"[cyan]Syncing last {days} days[/cyan]")
+    else:
+        # Default: incremental sync from last transaction
+        with get_session() as session:
+            latest = session.query(func.max(Transaction.created_at)).scalar()
+            if latest:
+                start_date = latest
+                rprint(f"[cyan]Incremental sync from {latest.strftime('%Y-%m-%d %H:%M')}[/cyan]")
+            else:
+                # No existing data, sync last 90 days as initial sync
+                start_date = datetime.utcnow() - timedelta(days=90)
+                rprint("[yellow]No existing data, syncing last 90 days[/yellow]")
 
     with Progress(
         SpinnerColumn(),
