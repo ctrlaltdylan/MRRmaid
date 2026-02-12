@@ -48,6 +48,12 @@ class MetricsSummary:
     net_revenue_retention: Optional[float] = None
     gross_revenue_retention: Optional[float] = None
 
+    # LTV metrics
+    arpu: Optional[float] = None
+    ltv: Optional[float] = None
+    ltv_lifespan: Optional[float] = None
+    average_lifespan_months: Optional[float] = None
+
     # Period
     period_start: Optional[datetime] = None
     period_end: Optional[datetime] = None
@@ -74,6 +80,10 @@ class MetricsSummary:
             "churn_rate": self.churn_rate,
             "net_revenue_retention": self.net_revenue_retention,
             "gross_revenue_retention": self.gross_revenue_retention,
+            "arpu": self.arpu,
+            "ltv": self.ltv,
+            "ltv_lifespan": self.ltv_lifespan,
+            "average_lifespan_months": self.average_lifespan_months,
             "period_start": self.period_start.isoformat() if self.period_start else None,
             "period_end": self.period_end.isoformat() if self.period_end else None,
             "currency": self.currency,
@@ -817,6 +827,154 @@ class MetricsCalculator:
             "total_customers": int(retention_df["Customers"].sum()),
             "total_revenue": float(retention_df["Revenue"].sum()),
         }
+
+    def calculate_ltv_metrics(
+        self,
+        period: str = "month",
+        source: Optional[TransactionSource] = None,
+    ) -> MetricsSummary:
+        """
+        Calculate Customer Lifetime Value (LTV) metrics.
+
+        Uses two methods:
+        1. Primary: LTV = ARPU / Monthly Churn Rate
+        2. Secondary: LTV = ARPU × Average Customer Lifespan
+
+        Args:
+            period: Analysis period for churn rate: 'month', 'quarter', 'year'
+            source: Optional filter by source
+
+        Returns:
+            MetricsSummary with LTV metrics populated
+        """
+        # Get current MRR and subscription data
+        current_summary = self.calculate_current_mrr(source=source)
+
+        summary = MetricsSummary(
+            total_mrr=current_summary.total_mrr,
+            shopify_mrr=current_summary.shopify_mrr,
+            stripe_mrr=current_summary.stripe_mrr,
+            active_subscriptions=current_summary.active_subscriptions,
+            total_subscriptions=current_summary.total_subscriptions,
+        )
+
+        # Calculate ARPU (Average Revenue Per User)
+        if current_summary.active_subscriptions > 0:
+            summary.arpu = current_summary.total_mrr / current_summary.active_subscriptions
+        else:
+            # Cannot calculate ARPU without active subscriptions
+            return summary
+
+        # Calculate churn rate for the period
+        now = datetime.utcnow()
+        if period == "month":
+            start = now - timedelta(days=30)
+        elif period == "quarter":
+            start = now - timedelta(days=90)
+        else:  # year
+            start = now - timedelta(days=365)
+
+        period_summary = self.calculate_mrr_for_period(
+            start_date=start,
+            end_date=now,
+            source=source,
+        )
+
+        summary.churn_rate = period_summary.churn_rate
+        summary.net_revenue_retention = period_summary.net_revenue_retention
+        summary.gross_revenue_retention = period_summary.gross_revenue_retention
+        summary.period_start = start
+        summary.period_end = now
+
+        # Calculate primary LTV: ARPU / Monthly Churn Rate
+        if summary.churn_rate is not None and summary.churn_rate > 0:
+            # Normalize churn rate to monthly if needed
+            if period == "quarter":
+                monthly_churn = summary.churn_rate / 3
+            elif period == "year":
+                monthly_churn = summary.churn_rate / 12
+            else:
+                monthly_churn = summary.churn_rate
+
+            summary.ltv = summary.arpu / (monthly_churn / 100)
+        # If churn rate is 0 or None, LTV stays None (infinite)
+
+        # Calculate average customer lifespan and secondary LTV
+        with get_session() as session:
+            avg_lifespan = self._calculate_average_customer_lifespan(session, source)
+        if avg_lifespan is not None:
+            summary.average_lifespan_months = avg_lifespan
+            summary.ltv_lifespan = summary.arpu * avg_lifespan
+
+        return summary
+
+    def _calculate_average_customer_lifespan(
+        self,
+        session: Session,
+        source: Optional[TransactionSource] = None,
+    ) -> Optional[float]:
+        """
+        Calculate average customer lifespan in months.
+
+        For active customers (last seen within 60 days), uses current date as end.
+        For churned customers, uses last_seen as end date.
+
+        Args:
+            session: Database session
+            source: Optional filter by source
+
+        Returns:
+            Average lifespan in months, or None if insufficient data
+        """
+        # Query first and last transaction dates per customer
+        query = session.query(
+            Transaction.customer_id,
+            func.min(Transaction.created_at).label("first_seen"),
+            func.max(Transaction.created_at).label("last_seen"),
+        ).filter(
+            Transaction.customer_id.isnot(None),
+            Transaction.net_amount > 0,
+        )
+
+        if source:
+            query = query.filter(Transaction.source == source)
+
+        results = query.group_by(Transaction.customer_id).all()
+
+        if len(results) < 10:
+            # Insufficient data for reliable calculation
+            return None
+
+        now = datetime.utcnow()
+        cutoff = now - timedelta(days=60)  # Active if seen in last 60 days
+        lifespans = []
+
+        for row in results:
+            first_seen = row.first_seen
+            last_seen = row.last_seen
+
+            if first_seen is None or last_seen is None:
+                continue
+
+            # Determine end date based on activity
+            if last_seen >= cutoff:
+                # Active customer - use now as end date
+                end_date = now
+            else:
+                # Churned customer - use last_seen as end date
+                end_date = last_seen
+
+            # Calculate lifespan in months
+            lifespan_days = (end_date - first_seen).days
+            lifespan_months = lifespan_days / 30.44  # Average days per month
+
+            if lifespan_months >= 0:
+                lifespans.append(lifespan_months)
+
+        if not lifespans:
+            return None
+
+        return sum(lifespans) / len(lifespans)
 
     def get_customer_analysis(
         self,

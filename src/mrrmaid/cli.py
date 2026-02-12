@@ -348,24 +348,39 @@ def dashboard(
 
     console.print(Panel(stats_table, title="Subscriptions", border_style="blue"))
 
-    # Rates
-    if summary.churn_rate is not None or summary.net_revenue_retention is not None:
-        rates_table = Table(show_header=False, box=None)
-        rates_table.add_column("Metric", style="cyan")
-        rates_table.add_column("Value", style="white")
+    # Calculate LTV metrics for the dashboard
+    ltv_summary = calculator.calculate_ltv_metrics(period="month", source=source_filter)
 
-        if summary.churn_rate is not None:
-            churn_color = "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
-            rates_table.add_row("Churn Rate", f"[{churn_color}]{summary.churn_rate:.1f}%[/{churn_color}]")
+    # Rates and LTV
+    rates_table = Table(show_header=False, box=None)
+    rates_table.add_column("Metric", style="cyan")
+    rates_table.add_column("Value", style="white")
 
-        if summary.net_revenue_retention is not None:
-            nrr_color = "green" if summary.net_revenue_retention >= 100 else "yellow" if summary.net_revenue_retention >= 90 else "red"
-            rates_table.add_row("Net Revenue Retention", f"[{nrr_color}]{summary.net_revenue_retention:.1f}%[/{nrr_color}]")
+    # Add ARPU
+    if ltv_summary.arpu is not None:
+        rates_table.add_row("ARPU", f"${ltv_summary.arpu:,.2f}")
 
-        if summary.gross_revenue_retention is not None:
-            grr_color = "green" if summary.gross_revenue_retention >= 90 else "yellow" if summary.gross_revenue_retention >= 80 else "red"
-            rates_table.add_row("Gross Revenue Retention", f"[{grr_color}]{summary.gross_revenue_retention:.1f}%[/{grr_color}]")
+    # Add LTV
+    if ltv_summary.ltv is not None:
+        ltv_color = "green" if ltv_summary.ltv >= 1000 else "yellow" if ltv_summary.ltv >= 500 else "red"
+        rates_table.add_row("LTV", f"[{ltv_color}]${ltv_summary.ltv:,.2f}[/{ltv_color}]")
+    elif ltv_summary.arpu is not None:
+        rates_table.add_row("LTV", "[yellow]N/A (0% churn)[/yellow]")
 
+    if ltv_summary.churn_rate is not None:
+        churn_color = "green" if ltv_summary.churn_rate < 5 else "yellow" if ltv_summary.churn_rate < 10 else "red"
+        rates_table.add_row("Churn Rate", f"[{churn_color}]{ltv_summary.churn_rate:.1f}%[/{churn_color}]")
+
+    if ltv_summary.net_revenue_retention is not None:
+        nrr_color = "green" if ltv_summary.net_revenue_retention >= 100 else "yellow" if ltv_summary.net_revenue_retention >= 90 else "red"
+        rates_table.add_row("Net Revenue Retention", f"[{nrr_color}]{ltv_summary.net_revenue_retention:.1f}%[/{nrr_color}]")
+
+    if ltv_summary.gross_revenue_retention is not None:
+        grr_color = "green" if ltv_summary.gross_revenue_retention >= 90 else "yellow" if ltv_summary.gross_revenue_retention >= 80 else "red"
+        rates_table.add_row("Gross Revenue Retention", f"[{grr_color}]{ltv_summary.gross_revenue_retention:.1f}%[/{grr_color}]")
+
+    # Only show the panel if there's content
+    if rates_table.row_count > 0:
         console.print(Panel(rates_table, title="Retention Metrics", border_style="magenta"))
 
 
@@ -601,6 +616,134 @@ def nrr(
         interpretation = "[red]High churn. Revenue from existing customers is declining.[/red]"
 
     console.print(f"\n{interpretation}")
+
+
+@app.command()
+def ltv(
+    period: str = typer.Option(
+        "month",
+        "--period",
+        "-p",
+        help="Analysis period: 'month', 'quarter', 'year'",
+    ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Filter by source: 'shopify' or 'stripe'",
+    ),
+) -> None:
+    """View Customer Lifetime Value (LTV) metrics."""
+    settings = get_settings()
+    init_db(settings.database_url)
+
+    source_filter = None
+    if source == "shopify":
+        source_filter = TransactionSource.SHOPIFY
+    elif source == "stripe":
+        source_filter = TransactionSource.STRIPE
+
+    calculator = MetricsCalculator()
+    summary = calculator.calculate_ltv_metrics(
+        period=period,
+        source=source_filter,
+    )
+
+    # Check if we have enough data
+    if summary.arpu is None:
+        rprint("[yellow]No active subscriptions found. Cannot calculate LTV.[/yellow]")
+        rprint("[dim]Run 'mrrmaid sync' to fetch subscription data.[/dim]")
+        raise typer.Exit(1)
+
+    # Main LTV panel
+    if summary.ltv is not None:
+        ltv_color = "green" if summary.ltv >= 1000 else "yellow" if summary.ltv >= 500 else "red"
+        ltv_display = f"${summary.ltv:,.2f}"
+    else:
+        ltv_color = "yellow"
+        ltv_display = "N/A (0% churn)"
+
+    period_label = period.title()
+    console.print(Panel(
+        f"[bold {ltv_color}]{ltv_display}[/bold {ltv_color}]",
+        title=f"Customer Lifetime Value ({period_label})",
+        subtitle="LTV = ARPU / Monthly Churn Rate",
+        border_style=ltv_color,
+    ))
+
+    # LTV Components table
+    components_table = Table(show_header=False, box=None)
+    components_table.add_column("Component", style="cyan", width=25)
+    components_table.add_column("Value", style="white")
+
+    components_table.add_row("[bold]LTV Components[/bold]", "")
+    components_table.add_row("ARPU (Monthly)", f"${summary.arpu:,.2f}")
+
+    if summary.churn_rate is not None:
+        churn_color = "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
+        churn_label = f"{period_label} Churn Rate"
+        components_table.add_row(churn_label, f"[{churn_color}]{summary.churn_rate:.2f}%[/{churn_color}]")
+    else:
+        components_table.add_row(f"{period_label} Churn Rate", "[dim]N/A[/dim]")
+
+    if summary.ltv is not None:
+        components_table.add_row("LTV (ARPU/Churn)", f"[bold]${summary.ltv:,.2f}[/bold]")
+    else:
+        components_table.add_row("LTV (ARPU/Churn)", "[yellow]N/A (0% churn)[/yellow]")
+
+    console.print(components_table)
+
+    # Lifespan Analysis
+    console.print()
+    lifespan_table = Table(show_header=False, box=None)
+    lifespan_table.add_column("Metric", style="cyan", width=25)
+    lifespan_table.add_column("Value", style="white")
+
+    lifespan_table.add_row("[bold]Lifespan Analysis[/bold]", "")
+
+    if summary.average_lifespan_months is not None:
+        lifespan_table.add_row("Avg Customer Lifespan", f"{summary.average_lifespan_months:.1f} months")
+        if summary.ltv_lifespan is not None:
+            lifespan_table.add_row("LTV (Lifespan-based)", f"${summary.ltv_lifespan:,.2f}")
+    else:
+        lifespan_table.add_row("Avg Customer Lifespan", "[dim]Insufficient data (<10 customers)[/dim]")
+        lifespan_table.add_row("LTV (Lifespan-based)", "[dim]N/A[/dim]")
+
+    console.print(lifespan_table)
+
+    # Health Indicators
+    console.print()
+    health_table = Table(show_header=False, box=None)
+    health_table.add_column("Indicator", style="cyan", width=25)
+    health_table.add_column("Value", style="white")
+
+    health_table.add_row("[bold]Health Indicators[/bold]", "")
+
+    if summary.ltv is not None and summary.arpu > 0:
+        ltv_arpu_ratio = summary.ltv / summary.arpu
+        ratio_color = "green" if ltv_arpu_ratio >= 12 else "yellow" if ltv_arpu_ratio >= 6 else "red"
+        health_table.add_row("LTV / ARPU Ratio", f"[{ratio_color}]{ltv_arpu_ratio:.1f}x[/{ratio_color}]")
+    else:
+        health_table.add_row("LTV / ARPU Ratio", "[dim]N/A[/dim]")
+
+    health_table.add_row("Active Subscriptions", str(summary.active_subscriptions))
+
+    console.print(health_table)
+
+    # Interpretation
+    console.print()
+    if summary.ltv is None:
+        interpretation = "[yellow]Zero churn is great, but LTV cannot be calculated. Monitor as customer base grows.[/yellow]"
+    elif summary.ltv >= 3000:
+        interpretation = "[green]Excellent! Customers provide strong long-term value.[/green]"
+    elif summary.ltv >= 1000:
+        interpretation = "[green]Good! Healthy customer lifetime value.[/green]"
+    elif summary.ltv >= 500:
+        interpretation = "[yellow]Moderate LTV. Consider improving retention or ARPU.[/yellow]"
+    else:
+        interpretation = "[red]Low LTV. Focus on reducing churn and/or increasing ARPU.[/red]"
+
+    console.print(interpretation)
 
 
 @app.command()
