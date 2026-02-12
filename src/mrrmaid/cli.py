@@ -320,8 +320,9 @@ def dashboard(
     calculator = MetricsCalculator()
     summary = calculator.calculate_current_mrr(source=source_filter)
 
-    # Main metrics panel
-    mrr_display = f"${summary.total_mrr:,.2f}"
+    # Main metrics panel - MRR and ARR
+    arr = summary.total_mrr * 12
+    mrr_display = f"MRR: ${summary.total_mrr:,.2f}  |  ARR: ${arr:,.2f}"
     if summary.shopify_mrr > 0 or summary.stripe_mrr > 0:
         breakdown = []
         if summary.shopify_mrr > 0:
@@ -332,8 +333,19 @@ def dashboard(
 
     console.print(Panel(
         f"[bold green]{mrr_display}[/bold green]",
-        title="[bold]Monthly Recurring Revenue (MRR)[/bold]",
+        title="[bold]Recurring Revenue[/bold]",
         border_style="green",
+    ))
+
+    # TTM (Trailing Twelve Months) Revenue
+    ttm_start = datetime.utcnow() - timedelta(days=365)
+    ttm_df = calculator.get_transactions_summary(start_date=ttm_start, source=source_filter)
+    ttm_revenue = ttm_df["net_amount"].sum() if not ttm_df.empty else 0
+
+    console.print(Panel(
+        f"[bold cyan]${ttm_revenue:,.2f}[/bold cyan]",
+        title="[bold]TTM Revenue (Last 12 Months Actual)[/bold]",
+        border_style="cyan",
     ))
 
     # Subscription stats
