@@ -1016,6 +1016,110 @@ def customers(
         console.print(f"\n[dim]Showing top {limit} of {len(df)} customers. Use --limit to see more.[/dim]")
 
 
+@app.command()
+def customer(
+    identifier: str = typer.Argument(
+        ...,
+        help="Customer ID or shop domain (partial match supported)",
+    ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Filter by source: 'shopify' or 'stripe'",
+    ),
+    export: Optional[str] = typer.Option(
+        None,
+        "--export",
+        "-e",
+        help="Export monthly history to CSV file",
+    ),
+) -> None:
+    """View detailed history for a specific customer."""
+    settings = get_settings()
+    init_db(settings.database_url)
+
+    source_filter = None
+    if source == "shopify":
+        source_filter = TransactionSource.SHOPIFY
+    elif source == "stripe":
+        source_filter = TransactionSource.STRIPE
+
+    calculator = MetricsCalculator()
+    data = calculator.get_customer_history(
+        customer_identifier=identifier,
+        source=source_filter,
+    )
+
+    if not data:
+        rprint(f"[yellow]No customer found matching '{identifier}'[/yellow]")
+        raise typer.Exit(1)
+
+    # Export if requested
+    if export:
+        import csv
+        with open(export, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["month", "revenue", "transactions"])
+            writer.writeheader()
+            writer.writerows(data["monthly_history"])
+        rprint(f"[green]Exported monthly history to {export}[/green]")
+        return
+
+    # Customer header
+    status_color = "green" if data["status"] == "active" else "red"
+    status_label = "Active" if data["status"] == "active" else f"Churned ({data['days_since_last']} days ago)"
+
+    console.print(Panel(
+        f"[bold]{data['display_name']}[/bold]\n"
+        f"[{status_color}]{status_label}[/{status_color}]",
+        title="Customer Details",
+        border_style="blue",
+    ))
+
+    # Summary stats
+    stats_table = Table(show_header=False, box=None)
+    stats_table.add_column("Metric", style="cyan", width=25)
+    stats_table.add_column("Value", style="white")
+
+    stats_table.add_row("[bold]Lifetime Value[/bold]", f"[bold green]${data['ltv']:,.2f}[/bold green]")
+    stats_table.add_row("Total Revenue", f"${data['total_revenue']:,.2f}")
+    stats_table.add_row("Monthly ARPU", f"${data['monthly_arpu']:,.2f}")
+    stats_table.add_row("Transactions", str(data['transaction_count']))
+    stats_table.add_row("Tenure", f"{data['tenure_months']:.1f} months")
+    stats_table.add_row("First Seen", data['first_seen'].strftime("%Y-%m-%d"))
+    stats_table.add_row("Last Seen", data['last_seen'].strftime("%Y-%m-%d"))
+
+    if data.get('customer_id') and data.get('shop_domain'):
+        stats_table.add_row("Customer ID", data['customer_id'])
+
+    console.print(stats_table)
+
+    # Monthly history table
+    console.print()
+    history_table = Table(title="Monthly Revenue History", show_header=True, header_style="bold cyan")
+    history_table.add_column("Month", style="white")
+    history_table.add_column("Revenue", justify="right", style="green")
+    history_table.add_column("Txns", justify="right")
+    history_table.add_column("", width=30)  # Sparkline-style bar
+
+    # Find max revenue for scaling bars
+    max_revenue = max((m["revenue"] for m in data["monthly_history"]), default=1)
+
+    for month_data in data["monthly_history"]:
+        # Create a simple bar visualization
+        bar_width = int((month_data["revenue"] / max_revenue) * 25) if max_revenue > 0 else 0
+        bar = "█" * bar_width
+
+        history_table.add_row(
+            month_data["month"],
+            f"${month_data['revenue']:,.2f}",
+            str(month_data["transactions"]),
+            f"[cyan]{bar}[/cyan]",
+        )
+
+    console.print(history_table)
+
+
 # ============================================================================
 # Data Commands
 # ============================================================================

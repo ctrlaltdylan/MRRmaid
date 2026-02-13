@@ -976,6 +976,108 @@ class MetricsCalculator:
 
         return sum(lifespans) / len(lifespans)
 
+    def get_customer_history(
+        self,
+        customer_identifier: str,
+        source: Optional[TransactionSource] = None,
+    ) -> dict:
+        """
+        Get detailed history for a specific customer.
+
+        Args:
+            customer_identifier: Customer ID or shop domain to look up
+            source: Optional filter by source
+
+        Returns:
+            Dictionary with customer details, monthly history, and LTV
+        """
+        with get_session() as session:
+            # Find transactions matching the customer identifier
+            # Match on customer_id OR shop_domain (partial match supported)
+            query = session.query(Transaction).filter(
+                Transaction.net_amount > 0,
+                or_(
+                    Transaction.customer_id.ilike(f"%{customer_identifier}%"),
+                    Transaction.shop_domain.ilike(f"%{customer_identifier}%"),
+                )
+            )
+
+            if source:
+                query = query.filter(Transaction.source == source)
+
+            transactions = query.order_by(Transaction.created_at.asc()).all()
+
+            if not transactions:
+                return {}
+
+            # Get customer info from first transaction
+            customer_id = transactions[0].customer_id
+            shop_domain = transactions[0].shop_domain
+            display_name = shop_domain or customer_id
+
+            # Calculate summary stats
+            total_revenue = sum(t.net_amount or 0 for t in transactions)
+            first_seen = transactions[0].created_at
+            last_seen = transactions[-1].created_at
+            transaction_count = len(transactions)
+
+            # Determine status (active if seen in last 60 days)
+            now = datetime.utcnow()
+            days_since_last = (now - last_seen).days
+            status = "active" if days_since_last <= 60 else "churned"
+
+            # Calculate tenure in months
+            tenure_days = (last_seen - first_seen).days if status == "churned" else (now - first_seen).days
+            tenure_months = tenure_days / 30.44
+
+            # Calculate monthly ARPU and LTV for this customer
+            if tenure_months > 0:
+                monthly_arpu = total_revenue / max(tenure_months, 1)
+                # For individual customer, LTV is simply total revenue if churned,
+                # or projected based on their ARPU if active
+                if status == "churned":
+                    ltv = total_revenue
+                else:
+                    # Project based on average lifespan (use 12 months if unknown)
+                    ltv = total_revenue  # Current value, could project further
+            else:
+                monthly_arpu = total_revenue
+                ltv = total_revenue
+
+            # Build month-over-month history
+            monthly_history = {}
+            for txn in transactions:
+                month_key = txn.created_at.strftime("%Y-%m")
+                if month_key not in monthly_history:
+                    monthly_history[month_key] = {
+                        "revenue": 0,
+                        "transactions": 0,
+                    }
+                monthly_history[month_key]["revenue"] += float(txn.net_amount or 0)
+                monthly_history[month_key]["transactions"] += 1
+
+            # Convert to sorted list
+            monthly_data = [
+                {"month": k, **v}
+                for k, v in sorted(monthly_history.items())
+            ]
+
+            return {
+                "customer_id": customer_id,
+                "shop_domain": shop_domain,
+                "display_name": display_name,
+                "status": status,
+                "total_revenue": total_revenue,
+                "transaction_count": transaction_count,
+                "first_seen": first_seen,
+                "last_seen": last_seen,
+                "days_since_last": days_since_last,
+                "tenure_months": tenure_months,
+                "monthly_arpu": monthly_arpu,
+                "ltv": ltv,
+                "monthly_history": monthly_data,
+            }
+
     def get_customer_analysis(
         self,
         source: Optional[TransactionSource] = None,
