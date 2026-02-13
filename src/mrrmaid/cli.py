@@ -1089,7 +1089,8 @@ def customer(
     stats_table.add_row("First Seen", data['first_seen'].strftime("%Y-%m-%d"))
     stats_table.add_row("Last Seen", data['last_seen'].strftime("%Y-%m-%d"))
 
-    if data.get('customer_id') and data.get('shop_domain'):
+    # Always show Customer ID for consistency
+    if data.get('customer_id'):
         stats_table.add_row("Customer ID", data['customer_id'])
 
     console.print(stats_table)
