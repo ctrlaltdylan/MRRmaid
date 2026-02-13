@@ -15,15 +15,20 @@ Track MRR, NRR, churn, and customer concentration from Shopify Partner and Strip
 ```
 $ mrrmaid dashboard
 
-╭────────────────────── Monthly Recurring Revenue (MRR) ───────────────────────╮
-│ $72,793.48                                                                   │
-│ (Shopify: $64,384.18 | Stripe: $8,409.30)                                    │
+╭───────────────────────────── Recurring Revenue ──────────────────────────────╮
+│ MRR: $75,252.03  |  ARR: $903,024.36                                         │
+│ (Shopify: $66,605.18 | Stripe: $8,646.85)                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────── TTM Revenue (Last 12 Months Actual) ─────────────────────╮
+│ $764,922.49                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## Features
 
 - **Multi-source** - Combines Shopify Partner + Stripe in one view
+- **LTV analysis** - Customer lifetime value with ARPU and churn-based calculations
+- **Customer history** - Deep-dive into any customer's month-over-month revenue
 - **Cohort analysis** - Track retention by customer vintage
 - **Concentration risk** - Identify over-reliance on top customers
 - **Resumable sync** - Full history backfills that survive interruptions
@@ -94,19 +99,29 @@ STRIPE_API_KEY=sk_live_xxx
 
 ### `mrrmaid dashboard`
 
-Overview of MRR and subscriptions.
+Overview of MRR, ARR, LTV, and retention metrics.
 
 ```bash
 $ mrrmaid dashboard
-╭────────────────────── Monthly Recurring Revenue (MRR) ───────────────────────╮
-│ $72,793.48                                                                   │
-│ (Shopify: $64,384.18 | Stripe: $8,409.30)                                    │
+╭───────────────────────────── Recurring Revenue ──────────────────────────────╮
+│ MRR: $75,252.03  |  ARR: $903,024.36                                         │
+│ (Shopify: $66,605.18 | Stripe: $8,646.85)                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────── TTM Revenue (Last 12 Months Actual) ─────────────────────╮
+│ $764,922.49                                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─────────────────────────────── Subscriptions ────────────────────────────────╮
-│  Total Subscriptions  308                                                    │
-│  Active               308                                                    │
+│  Total Subscriptions  476                                                    │
+│  Active               471                                                    │
 │  Trials               0                                                      │
 │  Canceled             0                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭───────────────────────────── Retention Metrics ──────────────────────────────╮
+│  ARPU                     $159.77                                            │
+│  LTV                      $2,056.62                                          │
+│  Churn Rate               7.8%                                               │
+│  Net Revenue Retention    109.6%                                             │
+│  Gross Revenue Retention  83.7%                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 $ mrrmaid dashboard --source shopify   # Filter by source
@@ -161,6 +176,35 @@ $ mrrmaid nrr --period quarter         # Quarterly NRR
 $ mrrmaid nrr --period year            # Annual NRR
 ```
 
+### `mrrmaid ltv`
+
+Customer Lifetime Value analysis.
+
+```bash
+$ mrrmaid ltv
+╭────────────────────── Customer Lifetime Value (Month) ───────────────────────╮
+│ $2,056.62                                                                    │
+╰────────────────────── LTV = ARPU / Monthly Churn Rate ───────────────────────╯
+ LTV Components
+ ARPU (Monthly)             $159.77
+ Month Churn Rate           7.77%
+ LTV (ARPU/Churn)           $2,056.62
+
+ Lifespan Analysis
+ Avg Customer Lifespan      12.3 months
+ LTV (Lifespan-based)       $1,957.66
+
+ Health Indicators
+ LTV / ARPU Ratio           12.9x
+ Active Subscriptions       471
+
+Good! Healthy customer lifetime value.
+
+$ mrrmaid ltv --period quarter         # Use quarterly churn rate
+$ mrrmaid ltv --period year            # Use annual churn rate
+$ mrrmaid ltv --source shopify         # Filter by source
+```
+
 ### `mrrmaid cohort`
 
 Cohort-based retention analysis.
@@ -211,8 +255,44 @@ Top 20% = 70.5% of revenue
 
 $ mrrmaid customers --period all       # All-time analysis
 $ mrrmaid customers --period quarter   # Last 90 days
+$ mrrmaid customers --cohort 2025-01   # Filter by cohort (first purchase month)
 $ mrrmaid customers --limit 50         # Show more customers
 $ mrrmaid customers --export cust.csv  # Export to CSV
+```
+
+### `mrrmaid customer`
+
+Deep-dive into a specific customer's history and LTV.
+
+```bash
+$ mrrmaid customer "acme-store"
+╭────────────────────────────── Customer Details ──────────────────────────────╮
+│ acme-store.myshopify.com                                                     │
+│ Active                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Lifetime Value             $30,446.61
+ Total Revenue              $30,446.61
+ Monthly ARPU               $8,661.63
+ Transactions               17487
+ Tenure                     3.5 months
+ First Seen                 2025-10-29
+ Last Seen                  2026-02-09
+ Customer ID                gid://partners/Shop/66133852249
+
+                    Monthly Revenue History
+┏━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Month   ┃    Revenue ┃ Txns ┃                                ┃
+┡━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ 2025-10 │    $609.00 │  420 │ █                              │
+│ 2025-11 │  $2,308.34 │ 1526 │ ████                           │
+│ 2025-12 │  $8,601.09 │ 2619 │ ████████████████               │
+│ 2026-01 │ $13,062.99 │ 8943 │ █████████████████████████      │
+│ 2026-02 │  $5,865.19 │ 3979 │ ███████████                    │
+└─────────┴────────────┴──────┴────────────────────────────────┘
+
+$ mrrmaid customer "cus_abc123"              # Stripe customer by ID
+$ mrrmaid customer "store" --source shopify  # Filter by source
+$ mrrmaid customer "acme" --export hist.csv  # Export monthly history
 ```
 
 ### `mrrmaid churn`
@@ -319,6 +399,10 @@ $ mrrmaid snapshot
 
 | Metric | Formula | Good | Warning |
 |--------|---------|------|---------|
+| **ARR** | MRR × 12 | - | - |
+| **TTM Revenue** | Sum of last 12 months actual revenue | - | - |
+| **ARPU** | MRR / Active Subscriptions | - | - |
+| **LTV** | ARPU / Monthly Churn Rate | >$1000 | <$500 |
 | **NRR** | (Start + Expansion - Contraction - Churn) / Start | >100% | <90% |
 | **GRR** | (Start - Contraction - Churn) / Start | >90% | <80% |
 | **Churn** | Churned MRR / Starting MRR | <5% | >10% |
