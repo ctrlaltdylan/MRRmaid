@@ -103,11 +103,12 @@ class Transaction(Base):
     raw_data = Column(Text, nullable=True)  # JSON string of original data
     synced_at = Column(DateTime, default=datetime.utcnow)
 
-    # Indexes for common queries
+    # Indexes and constraints
     __table_args__ = (
         Index("ix_transactions_source_created", "source", "created_at"),
         Index("ix_transactions_type_created", "transaction_type", "created_at"),
         Index("ix_transactions_customer_created", "customer_id", "created_at"),
+        Index("uq_transactions_external_source", "external_id", "source", unique=True),
     )
 
     def __repr__(self) -> str:

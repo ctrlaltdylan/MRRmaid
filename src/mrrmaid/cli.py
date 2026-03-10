@@ -1,5 +1,6 @@
 """Command-line interface for MRRmaid."""
 
+import calendar
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -1119,6 +1120,338 @@ def customer(
         )
 
     console.print(history_table)
+
+
+# ============================================================================
+# Comparison Commands
+# ============================================================================
+
+
+def _parse_period(period_str: str) -> tuple[datetime, datetime]:
+    """Parse a period string into (start_date, end_date).
+
+    Supports:
+        YYYY-MM  -> first/last day of month
+        YYYY-QN  -> first/last day of quarter
+    """
+    period_str = period_str.strip()
+
+    # Quarter format: 2025-Q4
+    if "-Q" in period_str.upper():
+        parts = period_str.upper().split("-Q")
+        year = int(parts[0])
+        quarter = int(parts[1])
+        if quarter < 1 or quarter > 4:
+            raise typer.BadParameter(f"Invalid quarter: Q{quarter}. Must be Q1-Q4.")
+        start_month = (quarter - 1) * 3 + 1
+        end_month = start_month + 2
+        start = datetime(year, start_month, 1)
+        end = datetime(year, end_month, calendar.monthrange(year, end_month)[1], 23, 59, 59)
+        return start, end
+
+    # Month format: 2025-02
+    try:
+        dt = datetime.strptime(period_str, "%Y-%m")
+        start = datetime(dt.year, dt.month, 1)
+        last_day = calendar.monthrange(dt.year, dt.month)[1]
+        end = datetime(dt.year, dt.month, last_day, 23, 59, 59)
+        return start, end
+    except ValueError:
+        raise typer.BadParameter(
+            f"Invalid period format: '{period_str}'. Use YYYY-MM or YYYY-QN."
+        )
+
+
+def _format_delta(old: float, new: float, is_pct: bool = False, invert: bool = False) -> str:
+    """Format the change between two values with color and arrows.
+
+    Args:
+        old: The baseline value.
+        new: The current value.
+        is_pct: If True, show percentage-point delta (e.g. +2.1pp).
+        invert: If True, a decrease is good (e.g. churn rate).
+    """
+    diff = new - old
+
+    if diff == 0:
+        return "[dim]—[/dim]"
+
+    # Determine if this change is positive (good)
+    is_good = diff > 0
+    if invert:
+        is_good = not is_good
+
+    color = "green" if is_good else "red"
+    arrow = "↑" if diff > 0 else "↓"
+    sign = "+" if diff > 0 else ""
+
+    if is_pct:
+        return f"[{color}]{sign}{diff:.1f}pp {arrow}[/{color}]"
+
+    # Dollar amount with percentage change
+    if old != 0:
+        pct_change = (diff / abs(old)) * 100
+        return f"[{color}]{sign}${diff:,.2f} ({sign}{pct_change:.1f}%) {arrow}[/{color}]"
+
+    # Old was zero — can't compute percentage
+    return f"[{color}]{sign}${diff:,.2f} {arrow}[/{color}]"
+
+
+def _format_count_delta(old: int, new: int, invert: bool = False) -> str:
+    """Format an integer delta with color and arrows."""
+    diff = new - old
+
+    if diff == 0:
+        return "[dim]—[/dim]"
+
+    is_good = diff > 0
+    if invert:
+        is_good = not is_good
+
+    color = "green" if is_good else "red"
+    arrow = "↑" if diff > 0 else "↓"
+    sign = "+" if diff > 0 else ""
+
+    if old != 0:
+        pct_change = (diff / abs(old)) * 100
+        return f"[{color}]{sign}{diff} ({sign}{pct_change:.1f}%) {arrow}[/{color}]"
+
+    return f"[{color}]{sign}{diff} {arrow}[/{color}]"
+
+
+def _period_label(start: datetime, end: datetime) -> str:
+    """Create a human-readable label for a period."""
+    if start.month == end.month and start.year == end.year:
+        return start.strftime("%b %Y")
+    # Quarter or multi-month
+    return f"{start.strftime('%b')}-{end.strftime('%b %Y')}"
+
+
+@app.command()
+def compare(
+    period: Optional[str] = typer.Option(
+        None,
+        "--period",
+        "-p",
+        help="Target period: YYYY-MM or YYYY-QN (default: last complete month)",
+    ),
+    vs: Optional[str] = typer.Option(
+        None,
+        "--vs",
+        help="Comparison period: YYYY-MM or YYYY-QN (default: same period one year prior)",
+    ),
+    source: Optional[str] = typer.Option(
+        None,
+        "--source",
+        "-s",
+        help="Filter by source: 'shopify' or 'stripe'",
+    ),
+) -> None:
+    """Compare metrics between two periods (YoY, QoQ, etc)."""
+    settings = get_settings()
+    init_db(settings.database_url)
+
+    source_filter = None
+    if source == "shopify":
+        source_filter = TransactionSource.SHOPIFY
+    elif source == "stripe":
+        source_filter = TransactionSource.STRIPE
+
+    # Default period: last complete month
+    if period is None:
+        now = datetime.utcnow()
+        # Go to last complete month
+        if now.month == 1:
+            last_month = datetime(now.year - 1, 12, 1)
+        else:
+            last_month = datetime(now.year, now.month - 1, 1)
+        period = last_month.strftime("%Y-%m")
+
+    period_start, period_end = _parse_period(period)
+
+    # Default vs: same period one year prior
+    if vs is None:
+        vs_start = period_start.replace(year=period_start.year - 1)
+        vs_end = period_end.replace(year=period_end.year - 1)
+        # Fix end day for leap year edge cases
+        last_day = calendar.monthrange(vs_end.year, vs_end.month)[1]
+        if vs_end.day > last_day:
+            vs_end = vs_end.replace(day=last_day)
+    else:
+        vs_start, vs_end = _parse_period(vs)
+
+    calculator = MetricsCalculator()
+
+    # Calculate metrics for both periods
+    current = calculator.calculate_mrr_for_period(
+        start_date=period_start,
+        end_date=period_end,
+        source=source_filter,
+    )
+    baseline = calculator.calculate_mrr_for_period(
+        start_date=vs_start,
+        end_date=vs_end,
+        source=source_filter,
+    )
+
+    # Get revenue for both periods
+    current_txns = calculator.get_transactions_summary(
+        start_date=period_start,
+        end_date=period_end,
+        source=source_filter,
+    )
+    baseline_txns = calculator.get_transactions_summary(
+        start_date=vs_start,
+        end_date=vs_end,
+        source=source_filter,
+    )
+
+    current_revenue = current_txns["net_amount"].sum() if not current_txns.empty else 0
+    baseline_revenue = baseline_txns["net_amount"].sum() if not baseline_txns.empty else 0
+
+    # Labels
+    current_label = _period_label(period_start, period_end)
+    baseline_label = _period_label(vs_start, vs_end)
+
+    # Build comparison table
+    table = Table(
+        show_header=True,
+        header_style="bold cyan",
+        title=f"Period Comparison: {current_label} vs {baseline_label}",
+        title_style="bold",
+    )
+    table.add_column("Metric", style="white", width=22)
+    table.add_column(baseline_label, justify="right", width=12)
+    table.add_column(current_label, justify="right", width=12)
+    table.add_column("Change", justify="right", min_width=20)
+
+    # MRR metrics
+    table.add_row(
+        "[bold]MRR[/bold]",
+        f"${baseline.total_mrr:,.2f}",
+        f"${current.total_mrr:,.2f}",
+        _format_delta(baseline.total_mrr, current.total_mrr),
+    )
+    table.add_row(
+        "New MRR",
+        f"${baseline.new_mrr:,.2f}",
+        f"${current.new_mrr:,.2f}",
+        _format_delta(baseline.new_mrr, current.new_mrr),
+    )
+    table.add_row(
+        "Expansion MRR",
+        f"${baseline.expansion_mrr:,.2f}",
+        f"${current.expansion_mrr:,.2f}",
+        _format_delta(baseline.expansion_mrr, current.expansion_mrr),
+    )
+    table.add_row(
+        "Contraction MRR",
+        f"${baseline.contraction_mrr:,.2f}",
+        f"${current.contraction_mrr:,.2f}",
+        _format_delta(baseline.contraction_mrr, current.contraction_mrr, invert=True),
+    )
+    table.add_row(
+        "Churned MRR",
+        f"${baseline.churned_mrr:,.2f}",
+        f"${current.churned_mrr:,.2f}",
+        _format_delta(baseline.churned_mrr, current.churned_mrr, invert=True),
+    )
+    table.add_row(
+        "[bold]Net New MRR[/bold]",
+        f"${baseline.net_new_mrr:,.2f}",
+        f"${current.net_new_mrr:,.2f}",
+        _format_delta(baseline.net_new_mrr, current.net_new_mrr),
+    )
+
+    # Separator
+    table.add_row("", "", "", "")
+
+    # Customer metrics
+    table.add_row(
+        "Active Customers",
+        str(baseline.active_subscriptions),
+        str(current.active_subscriptions),
+        _format_count_delta(baseline.active_subscriptions, current.active_subscriptions),
+    )
+    table.add_row(
+        "New Customers",
+        str(baseline.new_subscriptions),
+        str(current.new_subscriptions),
+        _format_count_delta(baseline.new_subscriptions, current.new_subscriptions),
+    )
+    table.add_row(
+        "Churned Customers",
+        str(baseline.churned_subscriptions),
+        str(current.churned_subscriptions),
+        _format_count_delta(baseline.churned_subscriptions, current.churned_subscriptions, invert=True),
+    )
+
+    # Separator
+    table.add_row("", "", "", "")
+
+    # Rates (percentage-point deltas)
+    baseline_churn = baseline.churn_rate
+    current_churn = current.churn_rate
+    if baseline_churn is not None and current_churn is not None:
+        table.add_row(
+            "Churn Rate",
+            f"{baseline_churn:.1f}%",
+            f"{current_churn:.1f}%",
+            _format_delta(baseline_churn, current_churn, is_pct=True, invert=True),
+        )
+    else:
+        table.add_row(
+            "Churn Rate",
+            f"{baseline_churn:.1f}%" if baseline_churn is not None else "[dim]N/A[/dim]",
+            f"{current_churn:.1f}%" if current_churn is not None else "[dim]N/A[/dim]",
+            "[dim]—[/dim]",
+        )
+
+    baseline_nrr = baseline.net_revenue_retention
+    current_nrr = current.net_revenue_retention
+    if baseline_nrr is not None and current_nrr is not None:
+        table.add_row(
+            "NRR",
+            f"{baseline_nrr:.1f}%",
+            f"{current_nrr:.1f}%",
+            _format_delta(baseline_nrr, current_nrr, is_pct=True),
+        )
+    else:
+        table.add_row(
+            "NRR",
+            f"{baseline_nrr:.1f}%" if baseline_nrr is not None else "[dim]N/A[/dim]",
+            f"{current_nrr:.1f}%" if current_nrr is not None else "[dim]N/A[/dim]",
+            "[dim]—[/dim]",
+        )
+
+    baseline_grr = baseline.gross_revenue_retention
+    current_grr = current.gross_revenue_retention
+    if baseline_grr is not None and current_grr is not None:
+        table.add_row(
+            "GRR",
+            f"{baseline_grr:.1f}%",
+            f"{current_grr:.1f}%",
+            _format_delta(baseline_grr, current_grr, is_pct=True),
+        )
+    else:
+        table.add_row(
+            "GRR",
+            f"{baseline_grr:.1f}%" if baseline_grr is not None else "[dim]N/A[/dim]",
+            f"{current_grr:.1f}%" if current_grr is not None else "[dim]N/A[/dim]",
+            "[dim]—[/dim]",
+        )
+
+    # Revenue
+    table.add_row(
+        "[bold]Revenue[/bold]",
+        f"${baseline_revenue:,.2f}",
+        f"${current_revenue:,.2f}",
+        _format_delta(baseline_revenue, current_revenue),
+    )
+
+    console.print()
+    console.print(table)
+    console.print()
 
 
 # ============================================================================
