@@ -323,6 +323,13 @@ class MetricsCalculator:
             elif txn.source == TransactionSource.SHOPIFY:
                 pass  # Already handled above
 
+    # Transaction types that represent recurring revenue (MRR)
+    RECURRING_TYPES = (
+        TransactionType.SUBSCRIPTION_NEW,
+        TransactionType.SUBSCRIPTION_RENEWAL,
+        TransactionType.APP_SUBSCRIPTION,
+    )
+
     def _calculate_churn_metrics(
         self,
         session: Session,
@@ -337,6 +344,9 @@ class MetricsCalculator:
         prev_start = start_date - period_length
         prev_end = start_date
 
+        # Only count recurring transaction types for MRR-based metrics
+        recurring_filter = Transaction.transaction_type.in_(self.RECURRING_TYPES)
+
         # Get revenue by customer for previous period (the "starting" cohort)
         prev_query = session.query(
             Transaction.customer_id,
@@ -345,6 +355,7 @@ class MetricsCalculator:
             Transaction.created_at >= prev_start,
             Transaction.created_at < prev_end,
             Transaction.customer_id.isnot(None),
+            recurring_filter,
         )
 
         if source:
@@ -363,6 +374,7 @@ class MetricsCalculator:
             Transaction.created_at >= start_date,
             Transaction.created_at <= end_date,
             Transaction.customer_id.isnot(None),
+            recurring_filter,
         )
 
         if source:

@@ -311,6 +311,38 @@ $ mrrmaid churn --period quarter       # Quarterly churn
 $ mrrmaid churn --period year          # Annual churn
 ```
 
+### `mrrmaid compare`
+
+Compare metrics between two periods side-by-side (YoY, QoQ, etc).
+
+```bash
+$ mrrmaid compare --period 2026-02 --vs 2025-02
+                     Period Comparison: Feb 2026 vs Feb 2025
+┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Metric                 ┃     Feb 2025 ┃     Feb 2026 ┃                 Change ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ MRR                    │   $32,737.05 │   $32,376.76 │     $-360.29 (-1.1%) ↓ │
+│ New MRR                │    $6,383.93 │    $5,637.88 │    $-746.05 (-11.7%) ↓ │
+│ Expansion MRR          │    $5,054.01 │    $1,233.35 │  $-3,820.66 (-75.6%) ↓ │
+│ Contraction MRR        │      $694.37 │      $758.77 │      +$64.40 (+9.3%) ↑ │
+│ Churned MRR            │    $5,137.03 │    $7,161.62 │  +$2,024.59 (+39.4%) ↑ │
+│ Net New MRR            │    $5,606.54 │   $-1,049.16 │ $-6,655.70 (-118.7%) ↓ │
+│                        │              │              │                        │
+│ Active Customers       │          383 │          387 │           +4 (+1.0%) ↑ │
+│ New Customers          │           57 │           61 │           +4 (+7.0%) ↑ │
+│ Churned Customers      │           44 │           48 │           +4 (+9.1%) ↑ │
+│                        │              │              │                        │
+│ Churn Rate             │        18.9% │        21.4% │               +2.5pp ↑ │
+│ NRR                    │        97.1% │        80.0% │              -17.1pp ↓ │
+│ GRR                    │        78.5% │        76.3% │               -2.2pp ↓ │
+│ Revenue                │   $52,342.02 │   $66,230.92 │ +$13,888.90 (+26.5%) ↑ │
+└────────────────────────┴──────────────┴──────────────┴────────────────────────┘
+
+$ mrrmaid compare                                 # Last month vs same month last year
+$ mrrmaid compare --period 2025-Q4 --vs 2024-Q4   # Quarter comparison
+$ mrrmaid compare --source stripe                  # Filter by source
+```
+
 ### `mrrmaid sync`
 
 Sync data from Shopify Partner and Stripe APIs.
