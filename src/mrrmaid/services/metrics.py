@@ -157,11 +157,13 @@ class MetricsCalculator:
             func.count(func.distinct(Transaction.customer_id)).label("unique_customers"),
         ).filter(
             Transaction.created_at >= since,
-            Transaction.transaction_type.in_([
-                TransactionType.APP_SUBSCRIPTION,
-                TransactionType.APP_USAGE,
-                TransactionType.SUBSCRIPTION_RENEWAL,
-            ]),
+            Transaction.transaction_type.in_(
+                [
+                    TransactionType.APP_SUBSCRIPTION,
+                    TransactionType.APP_USAGE,
+                    TransactionType.SUBSCRIPTION_RENEWAL,
+                ]
+            ),
         )
 
         if source:
@@ -253,14 +255,10 @@ class MetricsCalculator:
             )
 
             # Calculate from transactions
-            self._calculate_mrr_from_transactions(
-                session, summary, start_date, end_date, source
-            )
+            self._calculate_mrr_from_transactions(session, summary, start_date, end_date, source)
 
             # Calculate churn metrics
-            self._calculate_churn_metrics(
-                session, summary, start_date, end_date, source
-            )
+            self._calculate_churn_metrics(session, summary, start_date, end_date, source)
 
             # Calculate net new MRR
             summary.net_new_mrr = (
@@ -443,6 +441,7 @@ class MetricsCalculator:
         end_date: datetime,
         granularity: str = "month",
         source: Optional[TransactionSource] = None,
+        app_id: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Get MRR trend over time.
@@ -452,6 +451,7 @@ class MetricsCalculator:
             end_date: End of the period
             granularity: 'day', 'week', or 'month'
             source: Optional filter by source
+            app_id: Optional filter by app ID
 
         Returns:
             DataFrame with MRR trend data
@@ -487,15 +487,20 @@ class MetricsCalculator:
                 ).filter(
                     Transaction.created_at >= date,
                     Transaction.created_at < period_end,
-                    Transaction.transaction_type.in_([
-                        TransactionType.SUBSCRIPTION_NEW,
-                        TransactionType.SUBSCRIPTION_RENEWAL,
-                        TransactionType.APP_SUBSCRIPTION,
-                    ]),
+                    Transaction.transaction_type.in_(
+                        [
+                            TransactionType.SUBSCRIPTION_NEW,
+                            TransactionType.SUBSCRIPTION_RENEWAL,
+                            TransactionType.APP_SUBSCRIPTION,
+                        ]
+                    ),
                 )
 
                 if source:
                     query = query.filter(Transaction.source == source)
+
+                if app_id:
+                    query = query.filter(Transaction.app_id.like(f"%{app_id}%"))
 
                 results = query.group_by(Transaction.source).all()
 
@@ -553,20 +558,22 @@ class MetricsCalculator:
 
             data = []
             for txn in transactions:
-                data.append({
-                    "id": txn.id,
-                    "external_id": txn.external_id,
-                    "source": txn.source.value if txn.source else None,
-                    "type": txn.transaction_type.value if txn.transaction_type else None,
-                    "amount": txn.amount,
-                    "net_amount": txn.net_amount,
-                    "currency": txn.currency,
-                    "created_at": txn.created_at,
-                    "customer_id": txn.customer_id,
-                    "subscription_id": txn.subscription_id,
-                    "app_name": txn.app_name,
-                    "shop_domain": txn.shop_domain,
-                })
+                data.append(
+                    {
+                        "id": txn.id,
+                        "external_id": txn.external_id,
+                        "source": txn.source.value if txn.source else None,
+                        "type": txn.transaction_type.value if txn.transaction_type else None,
+                        "amount": txn.amount,
+                        "net_amount": txn.net_amount,
+                        "currency": txn.currency,
+                        "created_at": txn.created_at,
+                        "customer_id": txn.customer_id,
+                        "subscription_id": txn.subscription_id,
+                        "app_name": txn.app_name,
+                        "shop_domain": txn.shop_domain,
+                    }
+                )
 
             return pd.DataFrame(data)
 
@@ -597,21 +604,23 @@ class MetricsCalculator:
 
             data = []
             for sub in subscriptions:
-                data.append({
-                    "id": sub.id,
-                    "external_id": sub.external_id,
-                    "source": sub.source.value if sub.source else None,
-                    "status": sub.status,
-                    "monthly_amount": sub.monthly_amount,
-                    "currency": sub.currency,
-                    "created_at": sub.created_at,
-                    "canceled_at": sub.canceled_at,
-                    "customer_id": sub.customer_id,
-                    "customer_email": sub.customer_email,
-                    "app_name": sub.app_name,
-                    "shop_domain": sub.shop_domain,
-                    "interval": sub.interval,
-                })
+                data.append(
+                    {
+                        "id": sub.id,
+                        "external_id": sub.external_id,
+                        "source": sub.source.value if sub.source else None,
+                        "status": sub.status,
+                        "monthly_amount": sub.monthly_amount,
+                        "currency": sub.currency,
+                        "created_at": sub.created_at,
+                        "canceled_at": sub.canceled_at,
+                        "customer_id": sub.customer_id,
+                        "customer_email": sub.customer_email,
+                        "app_name": sub.app_name,
+                        "shop_domain": sub.shop_domain,
+                        "interval": sub.interval,
+                    }
+                )
 
             return pd.DataFrame(data)
 
@@ -688,19 +697,21 @@ class MetricsCalculator:
 
             data = []
             for snap in snapshots:
-                data.append({
-                    "date": snap.snapshot_date,
-                    "source": snap.source.value if snap.source else "combined",
-                    "total_mrr": snap.total_mrr,
-                    "new_mrr": snap.new_mrr,
-                    "expansion_mrr": snap.expansion_mrr,
-                    "contraction_mrr": snap.contraction_mrr,
-                    "churned_mrr": snap.churned_mrr,
-                    "active_subscriptions": snap.active_subscriptions,
-                    "churn_rate": snap.churn_rate,
-                    "nrr": snap.net_revenue_retention,
-                    "grr": snap.gross_revenue_retention,
-                })
+                data.append(
+                    {
+                        "date": snap.snapshot_date,
+                        "source": snap.source.value if snap.source else "combined",
+                        "total_mrr": snap.total_mrr,
+                        "new_mrr": snap.new_mrr,
+                        "expansion_mrr": snap.expansion_mrr,
+                        "contraction_mrr": snap.contraction_mrr,
+                        "churned_mrr": snap.churned_mrr,
+                        "active_subscriptions": snap.active_subscriptions,
+                        "churn_rate": snap.churn_rate,
+                        "nrr": snap.net_revenue_retention,
+                        "grr": snap.gross_revenue_retention,
+                    }
+                )
 
             return pd.DataFrame(data)
 
@@ -744,14 +755,16 @@ class MetricsCalculator:
                 return pd.DataFrame()
 
             # Convert to DataFrame for easier manipulation
-            df = pd.DataFrame([
-                {
-                    "customer_id": t.customer_id,
-                    "created_at": t.created_at,
-                    "revenue": float(t.net_amount or 0),
-                }
-                for t in transactions
-            ])
+            df = pd.DataFrame(
+                [
+                    {
+                        "customer_id": t.customer_id,
+                        "created_at": t.created_at,
+                        "revenue": float(t.net_amount or 0),
+                    }
+                    for t in transactions
+                ]
+            )
 
             # Add month column
             df["month"] = pd.to_datetime(df["created_at"]).dt.to_period("M")
@@ -764,21 +777,29 @@ class MetricsCalculator:
             df = df.merge(cohort_df, on="customer_id")
 
             # Calculate period index (months since cohort)
-            df["period_index"] = (df["month"] - df["cohort"]).apply(lambda x: x.n if hasattr(x, 'n') else 0)
+            df["period_index"] = (df["month"] - df["cohort"]).apply(
+                lambda x: x.n if hasattr(x, "n") else 0
+            )
 
             # Filter to requested number of periods
             df = df[df["period_index"] < num_periods]
 
             if metric == "revenue":
                 # Revenue retention: sum revenue by cohort and period
-                pivot = df.groupby(["cohort", "period_index"])["revenue"].sum().unstack(fill_value=0)
+                pivot = (
+                    df.groupby(["cohort", "period_index"])["revenue"].sum().unstack(fill_value=0)
+                )
 
                 # Calculate retention as % of period 0
                 retention = pivot.div(pivot[0], axis=0) * 100
 
             else:  # customers
                 # Customer retention: count unique customers by cohort and period
-                pivot = df.groupby(["cohort", "period_index"])["customer_id"].nunique().unstack(fill_value=0)
+                pivot = (
+                    df.groupby(["cohort", "period_index"])["customer_id"]
+                    .nunique()
+                    .unstack(fill_value=0)
+                )
 
                 # Calculate retention as % of period 0
                 retention = pivot.div(pivot[0], axis=0) * 100
@@ -793,17 +814,18 @@ class MetricsCalculator:
             retention.index = retention.index.astype(str)
 
             # Add cohort size info
-            cohort_sizes = df.groupby("cohort").agg({
-                "customer_id": "nunique",
-                "revenue": "sum"
-            }).round(2)
+            cohort_sizes = (
+                df.groupby("cohort").agg({"customer_id": "nunique", "revenue": "sum"}).round(2)
+            )
             cohort_sizes.index = cohort_sizes.index.astype(str)
 
             retention["Customers"] = cohort_sizes["customer_id"]
             retention["Revenue"] = cohort_sizes["revenue"]
 
             # Reorder columns to put Customers and Revenue first
-            cols = ["Customers", "Revenue"] + [c for c in retention.columns if c not in ["Customers", "Revenue"]]
+            cols = ["Customers", "Revenue"] + [
+                c for c in retention.columns if c not in ["Customers", "Revenue"]
+            ]
             retention = retention[cols]
 
             return retention
@@ -1011,7 +1033,7 @@ class MetricsCalculator:
                 or_(
                     Transaction.customer_id.ilike(f"%{customer_identifier}%"),
                     Transaction.shop_domain.ilike(f"%{customer_identifier}%"),
-                )
+                ),
             )
 
             if source:
@@ -1039,7 +1061,9 @@ class MetricsCalculator:
             status = "active" if days_since_last <= 60 else "churned"
 
             # Calculate tenure in months
-            tenure_days = (last_seen - first_seen).days if status == "churned" else (now - first_seen).days
+            tenure_days = (
+                (last_seen - first_seen).days if status == "churned" else (now - first_seen).days
+            )
             tenure_months = tenure_days / 30.44
 
             # Calculate monthly ARPU and LTV for this customer
@@ -1069,10 +1093,7 @@ class MetricsCalculator:
                 monthly_history[month_key]["transactions"] += 1
 
             # Convert to sorted list
-            monthly_data = [
-                {"month": k, **v}
-                for k, v in sorted(monthly_history.items())
-            ]
+            monthly_data = [{"month": k, **v} for k, v in sorted(monthly_history.items())]
 
             return {
                 "customer_id": customer_id,
@@ -1096,6 +1117,7 @@ class MetricsCalculator:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         cohort_month: Optional[str] = None,
+        app_id: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Get customer-level revenue analysis for concentration risk assessment.
@@ -1105,6 +1127,7 @@ class MetricsCalculator:
             start_date: Start of analysis period
             end_date: End of analysis period
             cohort_month: Filter by cohort (first transaction month), format: 'YYYY-MM'
+            app_id: Optional filter by app ID
 
         Returns:
             DataFrame with customer revenue data sorted by revenue descending
@@ -1124,18 +1147,27 @@ class MetricsCalculator:
                     raise ValueError(f"Invalid cohort format: {cohort_month}. Use YYYY-MM.")
 
                 # Find customers whose first transaction is in this cohort
-                first_txn_subquery = session.query(
-                    Transaction.customer_id,
-                    func.min(Transaction.created_at).label("first_txn"),
-                ).filter(
-                    Transaction.customer_id.isnot(None),
-                    Transaction.net_amount > 0,
-                ).group_by(Transaction.customer_id).subquery()
+                first_txn_subquery = (
+                    session.query(
+                        Transaction.customer_id,
+                        func.min(Transaction.created_at).label("first_txn"),
+                    )
+                    .filter(
+                        Transaction.customer_id.isnot(None),
+                        Transaction.net_amount > 0,
+                    )
+                    .group_by(Transaction.customer_id)
+                    .subquery()
+                )
 
-                cohort_customers = session.query(first_txn_subquery.c.customer_id).filter(
-                    first_txn_subquery.c.first_txn >= cohort_start,
-                    first_txn_subquery.c.first_txn < cohort_end,
-                ).all()
+                cohort_customers = (
+                    session.query(first_txn_subquery.c.customer_id)
+                    .filter(
+                        first_txn_subquery.c.first_txn >= cohort_start,
+                        first_txn_subquery.c.first_txn < cohort_end,
+                    )
+                    .all()
+                )
 
                 cohort_customer_ids = {c[0] for c in cohort_customers}
 
@@ -1157,6 +1189,9 @@ class MetricsCalculator:
 
             if source:
                 query = query.filter(Transaction.source == source)
+
+            if app_id:
+                query = query.filter(Transaction.app_id.like(f"%{app_id}%"))
 
             if start_date:
                 query = query.filter(Transaction.created_at >= start_date)
@@ -1182,13 +1217,15 @@ class MetricsCalculator:
             for row in results:
                 # Use shop_domain as display name if available, otherwise customer_id
                 display_name = row.shop_domain or row.customer_id
-                data.append({
-                    "customer_id": display_name,
-                    "revenue": float(row.revenue or 0),
-                    "transaction_count": row.transaction_count,
-                    "first_seen": row.first_seen,
-                    "last_seen": row.last_seen,
-                })
+                data.append(
+                    {
+                        "customer_id": display_name,
+                        "revenue": float(row.revenue or 0),
+                        "transaction_count": row.transaction_count,
+                        "first_seen": row.first_seen,
+                        "last_seen": row.last_seen,
+                    }
+                )
 
             df = pd.DataFrame(data)
 

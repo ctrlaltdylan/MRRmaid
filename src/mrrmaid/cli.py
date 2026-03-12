@@ -134,7 +134,11 @@ def status() -> None:
     table.add_row(
         "Shopify Partner",
         "[green]Yes[/green]" if shopify_configured else "[red]No[/red]",
-        "[green]OK[/green]" if shopify_connected else "[red]Failed[/red]" if shopify_configured else "[dim]N/A[/dim]",
+        "[green]OK[/green]"
+        if shopify_connected
+        else "[red]Failed[/red]"
+        if shopify_configured
+        else "[dim]N/A[/dim]",
     )
 
     # Check Stripe
@@ -150,7 +154,11 @@ def status() -> None:
     table.add_row(
         "Stripe",
         "[green]Yes[/green]" if stripe_configured else "[red]No[/red]",
-        "[green]OK[/green]" if stripe_connected else "[red]Failed[/red]" if stripe_configured else "[dim]N/A[/dim]",
+        "[green]OK[/green]"
+        if stripe_connected
+        else "[red]Failed[/red]"
+        if stripe_configured
+        else "[dim]N/A[/dim]",
     )
 
     console.print(table)
@@ -332,22 +340,26 @@ def dashboard(
             breakdown.append(f"Stripe: ${summary.stripe_mrr:,.2f}")
         mrr_display += f"\n[dim]({' | '.join(breakdown)})[/dim]"
 
-    console.print(Panel(
-        f"[bold green]{mrr_display}[/bold green]",
-        title="[bold]Recurring Revenue[/bold]",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]{mrr_display}[/bold green]",
+            title="[bold]Recurring Revenue[/bold]",
+            border_style="green",
+        )
+    )
 
     # TTM (Trailing Twelve Months) Revenue
     ttm_start = datetime.utcnow() - timedelta(days=365)
     ttm_df = calculator.get_transactions_summary(start_date=ttm_start, source=source_filter)
     ttm_revenue = ttm_df["net_amount"].sum() if not ttm_df.empty else 0
 
-    console.print(Panel(
-        f"[bold cyan]${ttm_revenue:,.2f}[/bold cyan]",
-        title="[bold]TTM Revenue (Last 12 Months Actual)[/bold]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]${ttm_revenue:,.2f}[/bold cyan]",
+            title="[bold]TTM Revenue (Last 12 Months Actual)[/bold]",
+            border_style="cyan",
+        )
+    )
 
     # Subscription stats
     stats_table = Table(show_header=False, box=None)
@@ -375,22 +387,50 @@ def dashboard(
 
     # Add LTV
     if ltv_summary.ltv is not None:
-        ltv_color = "green" if ltv_summary.ltv >= 1000 else "yellow" if ltv_summary.ltv >= 500 else "red"
+        ltv_color = (
+            "green" if ltv_summary.ltv >= 1000 else "yellow" if ltv_summary.ltv >= 500 else "red"
+        )
         rates_table.add_row("LTV", f"[{ltv_color}]${ltv_summary.ltv:,.2f}[/{ltv_color}]")
     elif ltv_summary.arpu is not None:
         rates_table.add_row("LTV", "[yellow]N/A (0% churn)[/yellow]")
 
     if ltv_summary.churn_rate is not None:
-        churn_color = "green" if ltv_summary.churn_rate < 5 else "yellow" if ltv_summary.churn_rate < 10 else "red"
-        rates_table.add_row("Churn Rate", f"[{churn_color}]{ltv_summary.churn_rate:.1f}%[/{churn_color}]")
+        churn_color = (
+            "green"
+            if ltv_summary.churn_rate < 5
+            else "yellow"
+            if ltv_summary.churn_rate < 10
+            else "red"
+        )
+        rates_table.add_row(
+            "Churn Rate", f"[{churn_color}]{ltv_summary.churn_rate:.1f}%[/{churn_color}]"
+        )
 
     if ltv_summary.net_revenue_retention is not None:
-        nrr_color = "green" if ltv_summary.net_revenue_retention >= 100 else "yellow" if ltv_summary.net_revenue_retention >= 90 else "red"
-        rates_table.add_row("Net Revenue Retention", f"[{nrr_color}]{ltv_summary.net_revenue_retention:.1f}%[/{nrr_color}]")
+        nrr_color = (
+            "green"
+            if ltv_summary.net_revenue_retention >= 100
+            else "yellow"
+            if ltv_summary.net_revenue_retention >= 90
+            else "red"
+        )
+        rates_table.add_row(
+            "Net Revenue Retention",
+            f"[{nrr_color}]{ltv_summary.net_revenue_retention:.1f}%[/{nrr_color}]",
+        )
 
     if ltv_summary.gross_revenue_retention is not None:
-        grr_color = "green" if ltv_summary.gross_revenue_retention >= 90 else "yellow" if ltv_summary.gross_revenue_retention >= 80 else "red"
-        rates_table.add_row("Gross Revenue Retention", f"[{grr_color}]{ltv_summary.gross_revenue_retention:.1f}%[/{grr_color}]")
+        grr_color = (
+            "green"
+            if ltv_summary.gross_revenue_retention >= 90
+            else "yellow"
+            if ltv_summary.gross_revenue_retention >= 80
+            else "red"
+        )
+        rates_table.add_row(
+            "Gross Revenue Retention",
+            f"[{grr_color}]{ltv_summary.gross_revenue_retention:.1f}%[/{grr_color}]",
+        )
 
     # Only show the panel if there's content
     if rates_table.row_count > 0:
@@ -420,6 +460,12 @@ def mrr(
         "--granularity",
         "-g",
         help="Time granularity: 'day', 'week', or 'month'",
+    ),
+    app_id: Optional[str] = typer.Option(
+        None,
+        "--app-id",
+        "-a",
+        help="Filter by specific app ID",
     ),
 ) -> None:
     """View MRR metrics and trends."""
@@ -451,6 +497,7 @@ def mrr(
         end_date=end,
         granularity=granularity,
         source=source_filter,
+        app_id=app_id,
     )
 
     if trend_df.empty:
@@ -458,7 +505,10 @@ def mrr(
         return
 
     # Display trend table
-    table = Table(title=f"MRR Trend ({granularity.title()})")
+    title = f"MRR Trend ({granularity.title()})"
+    if app_id:
+        title += f" - App: {app_id}"
+    table = Table(title=title)
     table.add_column("Period", style="cyan")
     table.add_column("Total MRR", style="green", justify="right")
     table.add_column("Shopify", style="yellow", justify="right")
@@ -519,11 +569,13 @@ def churn(
     )
 
     # Display churn panel
-    console.print(Panel(
-        f"[bold]Period:[/bold] {start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
-        title="Churn Analysis",
-        border_style="red",
-    ))
+    console.print(
+        Panel(
+            f"[bold]Period:[/bold] {start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
+            title="Churn Analysis",
+            border_style="red",
+        )
+    )
 
     table = Table(show_header=False, box=None)
     table.add_column("Metric", style="cyan", width=30)
@@ -533,7 +585,9 @@ def churn(
     table.add_row("Churned Subscriptions", f"[red]{summary.churned_subscriptions}[/red]")
 
     if summary.churn_rate is not None:
-        churn_color = "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
+        churn_color = (
+            "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
+        )
         table.add_row("Churn Rate", f"[{churn_color}]{summary.churn_rate:.2f}%[/{churn_color}]")
 
     table.add_row("", "")
@@ -544,7 +598,9 @@ def churn(
     table.add_row("Churned MRR", f"[red]-${summary.churned_mrr:,.2f}[/red]")
     table.add_row("", "")
     net_color = "green" if summary.net_new_mrr >= 0 else "red"
-    table.add_row("[bold]Net New MRR[/bold]", f"[{net_color}]${summary.net_new_mrr:,.2f}[/{net_color}]")
+    table.add_row(
+        "[bold]Net New MRR[/bold]", f"[{net_color}]${summary.net_new_mrr:,.2f}[/{net_color}]"
+    )
 
     console.print(table)
 
@@ -593,12 +649,14 @@ def nrr(
     nrr_value = summary.net_revenue_retention or 0
     nrr_color = "green" if nrr_value >= 100 else "yellow" if nrr_value >= 90 else "red"
 
-    console.print(Panel(
-        f"[bold {nrr_color}]{nrr_value:.1f}%[/bold {nrr_color}]",
-        title=f"Net Revenue Retention ({period.title()})",
-        subtitle=f"{start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
-        border_style=nrr_color,
-    ))
+    console.print(
+        Panel(
+            f"[bold {nrr_color}]{nrr_value:.1f}%[/bold {nrr_color}]",
+            title=f"Net Revenue Retention ({period.title()})",
+            subtitle=f"{start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')}",
+            border_style=nrr_color,
+        )
+    )
 
     # Explanation
     table = Table(show_header=False, box=None)
@@ -613,8 +671,17 @@ def nrr(
     table.add_row("", "")
 
     if summary.gross_revenue_retention is not None:
-        grr_color = "green" if summary.gross_revenue_retention >= 90 else "yellow" if summary.gross_revenue_retention >= 80 else "red"
-        table.add_row("Gross Revenue Retention", f"[{grr_color}]{summary.gross_revenue_retention:.1f}%[/{grr_color}]")
+        grr_color = (
+            "green"
+            if summary.gross_revenue_retention >= 90
+            else "yellow"
+            if summary.gross_revenue_retention >= 80
+            else "red"
+        )
+        table.add_row(
+            "Gross Revenue Retention",
+            f"[{grr_color}]{summary.gross_revenue_retention:.1f}%[/{grr_color}]",
+        )
 
     console.print(table)
 
@@ -677,12 +744,14 @@ def ltv(
         ltv_display = "N/A (0% churn)"
 
     period_label = period.title()
-    console.print(Panel(
-        f"[bold {ltv_color}]{ltv_display}[/bold {ltv_color}]",
-        title=f"Customer Lifetime Value ({period_label})",
-        subtitle="LTV = ARPU / Monthly Churn Rate",
-        border_style=ltv_color,
-    ))
+    console.print(
+        Panel(
+            f"[bold {ltv_color}]{ltv_display}[/bold {ltv_color}]",
+            title=f"Customer Lifetime Value ({period_label})",
+            subtitle="LTV = ARPU / Monthly Churn Rate",
+            border_style=ltv_color,
+        )
+    )
 
     # LTV Components table
     components_table = Table(show_header=False, box=None)
@@ -693,9 +762,13 @@ def ltv(
     components_table.add_row("ARPU (Monthly)", f"${summary.arpu:,.2f}")
 
     if summary.churn_rate is not None:
-        churn_color = "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
+        churn_color = (
+            "green" if summary.churn_rate < 5 else "yellow" if summary.churn_rate < 10 else "red"
+        )
         churn_label = f"{period_label} Churn Rate"
-        components_table.add_row(churn_label, f"[{churn_color}]{summary.churn_rate:.2f}%[/{churn_color}]")
+        components_table.add_row(
+            churn_label, f"[{churn_color}]{summary.churn_rate:.2f}%[/{churn_color}]"
+        )
     else:
         components_table.add_row(f"{period_label} Churn Rate", "[dim]N/A[/dim]")
 
@@ -715,11 +788,15 @@ def ltv(
     lifespan_table.add_row("[bold]Lifespan Analysis[/bold]", "")
 
     if summary.average_lifespan_months is not None:
-        lifespan_table.add_row("Avg Customer Lifespan", f"{summary.average_lifespan_months:.1f} months")
+        lifespan_table.add_row(
+            "Avg Customer Lifespan", f"{summary.average_lifespan_months:.1f} months"
+        )
         if summary.ltv_lifespan is not None:
             lifespan_table.add_row("LTV (Lifespan-based)", f"${summary.ltv_lifespan:,.2f}")
     else:
-        lifespan_table.add_row("Avg Customer Lifespan", "[dim]Insufficient data (<10 customers)[/dim]")
+        lifespan_table.add_row(
+            "Avg Customer Lifespan", "[dim]Insufficient data (<10 customers)[/dim]"
+        )
         lifespan_table.add_row("LTV (Lifespan-based)", "[dim]N/A[/dim]")
 
     console.print(lifespan_table)
@@ -734,8 +811,12 @@ def ltv(
 
     if summary.ltv is not None and summary.arpu > 0:
         ltv_arpu_ratio = summary.ltv / summary.arpu
-        ratio_color = "green" if ltv_arpu_ratio >= 12 else "yellow" if ltv_arpu_ratio >= 6 else "red"
-        health_table.add_row("LTV / ARPU Ratio", f"[{ratio_color}]{ltv_arpu_ratio:.1f}x[/{ratio_color}]")
+        ratio_color = (
+            "green" if ltv_arpu_ratio >= 12 else "yellow" if ltv_arpu_ratio >= 6 else "red"
+        )
+        health_table.add_row(
+            "LTV / ARPU Ratio", f"[{ratio_color}]{ltv_arpu_ratio:.1f}x[/{ratio_color}]"
+        )
     else:
         health_table.add_row("LTV / ARPU Ratio", "[dim]N/A[/dim]")
 
@@ -817,11 +898,13 @@ def cohort(
     metric_label = "Revenue Retention" if metric == "revenue" else "Customer Retention"
     source_label = f" ({source.title()})" if source else ""
 
-    console.print(Panel(
-        f"[bold]Cohort Analysis - {metric_label}{source_label}[/bold]\n"
-        f"[dim]Shows % retention relative to first month (M0 = 100%)[/dim]",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]Cohort Analysis - {metric_label}{source_label}[/bold]\n"
+            f"[dim]Shows % retention relative to first month (M0 = 100%)[/dim]",
+            border_style="blue",
+        )
+    )
 
     # Build the table
     table = Table(show_header=True, header_style="bold cyan")
@@ -907,6 +990,12 @@ def customers(
         "-e",
         help="Export to CSV file",
     ),
+    app_id: Optional[str] = typer.Option(
+        None,
+        "--app-id",
+        "-a",
+        help="Filter by specific app ID",
+    ),
 ) -> None:
     """Analyze customers by revenue concentration."""
     settings = get_settings()
@@ -935,6 +1024,7 @@ def customers(
         start_date=start_date,
         end_date=now,
         cohort_month=cohort,
+        app_id=app_id,
     )
 
     if df.empty:
@@ -967,19 +1057,28 @@ def customers(
     # Header
     period_label = period.title() if period != "all" else "All Time"
     source_label = f" ({source.title()})" if source else ""
-    console.print(Panel(
-        f"[bold]Customer Revenue Analysis - {period_label}{source_label}[/bold]\n"
-        f"[dim]Total Revenue: ${total_revenue:,.2f} from {len(df)} customers[/dim]",
-        border_style="blue",
-    ))
+    app_label = f" - App: {app_id}" if app_id else ""
+    console.print(
+        Panel(
+            f"[bold]Customer Revenue Analysis - {period_label}{source_label}{app_label}[/bold]\n"
+            f"[dim]Total Revenue: ${total_revenue:,.2f} from {len(df)} customers[/dim]",
+            border_style="blue",
+        )
+    )
 
     # Concentration warning
     if top_10_pct > 50:
-        console.print(f"[red]⚠ High concentration risk: Top 10% of customers = {top_10_pct:.1f}% of revenue[/red]")
+        console.print(
+            f"[red]⚠ High concentration risk: Top 10% of customers = {top_10_pct:.1f}% of revenue[/red]"
+        )
     elif top_10_pct > 30:
-        console.print(f"[yellow]⚠ Moderate concentration: Top 10% of customers = {top_10_pct:.1f}% of revenue[/yellow]")
+        console.print(
+            f"[yellow]⚠ Moderate concentration: Top 10% of customers = {top_10_pct:.1f}% of revenue[/yellow]"
+        )
     else:
-        console.print(f"[green]✓ Healthy distribution: Top 10% of customers = {top_10_pct:.1f}% of revenue[/green]")
+        console.print(
+            f"[green]✓ Healthy distribution: Top 10% of customers = {top_10_pct:.1f}% of revenue[/green]"
+        )
 
     console.print(f"[dim]Top 20% = {top_20_pct:.1f}% of revenue[/dim]\n")
 
@@ -1014,7 +1113,9 @@ def customers(
     console.print(table)
 
     if len(df) > limit:
-        console.print(f"\n[dim]Showing top {limit} of {len(df)} customers. Use --limit to see more.[/dim]")
+        console.print(
+            f"\n[dim]Showing top {limit} of {len(df)} customers. Use --limit to see more.[/dim]"
+        )
 
 
 @app.command()
@@ -1059,6 +1160,7 @@ def customer(
     # Export if requested
     if export:
         import csv
+
         with open(export, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=["month", "revenue", "transactions"])
             writer.writeheader()
@@ -1068,37 +1170,44 @@ def customer(
 
     # Customer header
     status_color = "green" if data["status"] == "active" else "red"
-    status_label = "Active" if data["status"] == "active" else f"Churned ({data['days_since_last']} days ago)"
+    status_label = (
+        "Active" if data["status"] == "active" else f"Churned ({data['days_since_last']} days ago)"
+    )
 
-    console.print(Panel(
-        f"[bold]{data['display_name']}[/bold]\n"
-        f"[{status_color}]{status_label}[/{status_color}]",
-        title="Customer Details",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[bold]{data['display_name']}[/bold]\n[{status_color}]{status_label}[/{status_color}]",
+            title="Customer Details",
+            border_style="blue",
+        )
+    )
 
     # Summary stats
     stats_table = Table(show_header=False, box=None)
     stats_table.add_column("Metric", style="cyan", width=25)
     stats_table.add_column("Value", style="white")
 
-    stats_table.add_row("[bold]Lifetime Value[/bold]", f"[bold green]${data['ltv']:,.2f}[/bold green]")
+    stats_table.add_row(
+        "[bold]Lifetime Value[/bold]", f"[bold green]${data['ltv']:,.2f}[/bold green]"
+    )
     stats_table.add_row("Total Revenue", f"${data['total_revenue']:,.2f}")
     stats_table.add_row("Monthly ARPU", f"${data['monthly_arpu']:,.2f}")
-    stats_table.add_row("Transactions", str(data['transaction_count']))
+    stats_table.add_row("Transactions", str(data["transaction_count"]))
     stats_table.add_row("Tenure", f"{data['tenure_months']:.1f} months")
-    stats_table.add_row("First Seen", data['first_seen'].strftime("%Y-%m-%d"))
-    stats_table.add_row("Last Seen", data['last_seen'].strftime("%Y-%m-%d"))
+    stats_table.add_row("First Seen", data["first_seen"].strftime("%Y-%m-%d"))
+    stats_table.add_row("Last Seen", data["last_seen"].strftime("%Y-%m-%d"))
 
     # Always show Customer ID for consistency
-    if data.get('customer_id'):
-        stats_table.add_row("Customer ID", data['customer_id'])
+    if data.get("customer_id"):
+        stats_table.add_row("Customer ID", data["customer_id"])
 
     console.print(stats_table)
 
     # Monthly history table
     console.print()
-    history_table = Table(title="Monthly Revenue History", show_header=True, header_style="bold cyan")
+    history_table = Table(
+        title="Monthly Revenue History", show_header=True, header_style="bold cyan"
+    )
     history_table.add_column("Month", style="white")
     history_table.add_column("Revenue", justify="right", style="green")
     history_table.add_column("Txns", justify="right")
@@ -1157,9 +1266,7 @@ def _parse_period(period_str: str) -> tuple[datetime, datetime]:
         end = datetime(dt.year, dt.month, last_day, 23, 59, 59)
         return start, end
     except ValueError:
-        raise typer.BadParameter(
-            f"Invalid period format: '{period_str}'. Use YYYY-MM or YYYY-QN."
-        )
+        raise typer.BadParameter(f"Invalid period format: '{period_str}'. Use YYYY-MM or YYYY-QN.")
 
 
 def _format_delta(old: float, new: float, is_pct: bool = False, invert: bool = False) -> str:
@@ -1383,7 +1490,9 @@ def compare(
         "Churned Customers",
         str(baseline.churned_subscriptions),
         str(current.churned_subscriptions),
-        _format_count_delta(baseline.churned_subscriptions, current.churned_subscriptions, invert=True),
+        _format_count_delta(
+            baseline.churned_subscriptions, current.churned_subscriptions, invert=True
+        ),
     )
 
     # Separator
@@ -1602,10 +1711,14 @@ def subscriptions(
             "past_due": "red",
         }.get(row["status"], "white")
 
-        customer = row.get("customer_email") or row.get("shop_domain") or row.get("customer_id") or "-"
+        customer = (
+            row.get("customer_email") or row.get("shop_domain") or row.get("customer_id") or "-"
+        )
 
         table.add_row(
-            str(row["external_id"])[:20] + "..." if len(str(row["external_id"])) > 20 else str(row["external_id"]),
+            str(row["external_id"])[:20] + "..."
+            if len(str(row["external_id"])) > 20
+            else str(row["external_id"]),
             row["source"] or "-",
             f"[{status_color}]{row['status']}[/{status_color}]",
             f"${row['monthly_amount']:,.2f}" if row["monthly_amount"] else "-",
