@@ -448,9 +448,13 @@ class DataSyncService:
         created_at_min: Optional[datetime] = None,
         created_at_max: Optional[datetime] = None,
         progress_callback: Optional[callable] = None,
-    ) -> dict[str, int]:
+    ) -> tuple[dict[str, int], dict[str, str]]:
         """
         Sync all data from configured sources.
+
+        Each source is synced independently: a failure in one source (e.g.
+        invalid credentials) is captured and reported rather than aborting the
+        whole run, so a bad Shopify config can't stop a Stripe-only sync.
 
         Args:
             created_at_min: Only sync data after this date
@@ -458,27 +462,36 @@ class DataSyncService:
             progress_callback: Optional callback for progress updates
 
         Returns:
-            Dictionary with counts for each source
+            A ``(results, errors)`` tuple where ``results`` maps each
+            successfully synced source to its record count and ``errors`` maps
+            each failed source ("shopify"/"stripe") to its error message.
         """
         results = {}
+        errors = {}
 
         if self.shopify_client:
-            results["shopify_transactions"] = self.sync_shopify_transactions(
-                created_at_min=created_at_min,
-                created_at_max=created_at_max,
-                progress_callback=progress_callback,
-            )
+            try:
+                results["shopify_transactions"] = self.sync_shopify_transactions(
+                    created_at_min=created_at_min,
+                    created_at_max=created_at_max,
+                    progress_callback=progress_callback,
+                )
+            except Exception as e:
+                errors["shopify"] = str(e)
 
         if self.stripe_client:
-            results["stripe_subscriptions"] = self.sync_stripe_subscriptions(
-                created_gte=created_at_min,
-                created_lte=created_at_max,
-                progress_callback=progress_callback,
-            )
-            results["stripe_invoices"] = self.sync_stripe_invoices(
-                created_gte=created_at_min,
-                created_lte=created_at_max,
-                progress_callback=progress_callback,
-            )
+            try:
+                results["stripe_subscriptions"] = self.sync_stripe_subscriptions(
+                    created_gte=created_at_min,
+                    created_lte=created_at_max,
+                    progress_callback=progress_callback,
+                )
+                results["stripe_invoices"] = self.sync_stripe_invoices(
+                    created_gte=created_at_min,
+                    created_lte=created_at_max,
+                    progress_callback=progress_callback,
+                )
+            except Exception as e:
+                errors["stripe"] = str(e)
 
-        return results
+        return results, errors
