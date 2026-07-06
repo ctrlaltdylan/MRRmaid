@@ -59,19 +59,19 @@ def main(
 @app.command()
 def configure(
     shopify_token: Optional[str] = typer.Option(
-        None,
+        "",
         "--shopify-token",
         help="Shopify Partner API access token",
         prompt="Shopify Partner API token (leave empty to skip)",
     ),
     shopify_org_id: Optional[str] = typer.Option(
-        None,
+        "",
         "--shopify-org-id",
         help="Shopify Partner organization ID",
         prompt="Shopify organization ID (leave empty to skip)",
     ),
     stripe_key: Optional[str] = typer.Option(
-        None,
+        "",
         "--stripe-key",
         help="Stripe API secret key",
         prompt="Stripe API secret key (leave empty to skip)",
