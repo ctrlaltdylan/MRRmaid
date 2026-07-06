@@ -278,20 +278,30 @@ def sync(
         def update_progress(count: int) -> None:
             progress.update(task, description=f"Synced {count} records...")
 
-        results = sync_service.sync_all(
+        results, errors = sync_service.sync_all(
             created_at_min=start_date,
             progress_callback=update_progress,
         )
 
+    # Report any per-source failures without hiding successful syncs
+    for source, message in errors.items():
+        rprint(f"[yellow]⚠ {source.title()} sync failed:[/yellow] {message}")
+
     # Display results
-    table = Table(title="Sync Results")
-    table.add_column("Source", style="cyan")
-    table.add_column("Records", style="green")
+    if results:
+        table = Table(title="Sync Results")
+        table.add_column("Source", style="cyan")
+        table.add_column("Records", style="green")
 
-    for key, count in results.items():
-        table.add_row(key.replace("_", " ").title(), str(count))
+        for key, count in results.items():
+            table.add_row(key.replace("_", " ").title(), str(count))
 
-    console.print(table)
+        console.print(table)
+
+    # Non-zero exit only when every configured source failed
+    if errors and not results:
+        rprint("[red]All configured sources failed to sync.[/red]")
+        raise typer.Exit(1)
 
 
 # ============================================================================
